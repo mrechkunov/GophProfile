@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   kafka:
     image: confluentinc/cp-kafka:latest
@@ -85,6 +83,10 @@ services:
 
   app:
     build: .
+    develop:
+      watch:
+        - action: rebuild
+          path: .
     container_name: gophprofile
     ports:
       - "8080:8080"
