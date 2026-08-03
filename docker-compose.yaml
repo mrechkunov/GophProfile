@@ -19,7 +19,7 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
     volumes:
-      - ./kafka_data:/var/lib/kafka/data
+      - kafka_data:/var/lib/kafka/data
     healthcheck:
       test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
       interval: 15s
@@ -84,7 +84,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      minio:
       kafka:
         condition: service_healthy
 
