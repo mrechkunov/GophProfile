@@ -3,7 +3,6 @@ package config
 import (
 	"database/sql"
 	"flag"
-	"fmt"
 	"gophprofile/internal/logger"
 	"os"
 
@@ -31,7 +30,7 @@ var ConfigAddresses = Addresses{
 func Init() {
 	ba := flag.String("a", "localhost:8080", "adress to server run")
 	mp := flag.String("m", "file://migrations", "default migration PATH")
-	cs := flag.String("d", "postgres://postgres:secret@postgres:5432/postgres?sslmode=disable", "default DBConnStr")
+	cs := flag.String("d", "postgres://gophprofile_user:secret@localhost/gophprofiledb?sslmode=disable", "default DBConnStr")
 	flag.Parse()
 
 	// если переиенные окружения установленны, берем их, иначе берем флаг
@@ -71,8 +70,6 @@ func migrations(DBconn *sql.DB) {
 	m, err := migrate.New(
 		ConfigAddresses.MigrationsPath,
 		ConfigAddresses.DBConnStr)
-	fmt.Println(ConfigAddresses.MigrationsPath)
-	fmt.Println(ConfigAddresses.DBConnStr)
 	if err != nil {
 		logger.Log.Errorln("error initializing migrate:", err)
 	}
