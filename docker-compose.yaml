@@ -43,7 +43,7 @@ services:
         kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic test-topic --partitions 1 --replication-factor 1"
 
   postgres:
-    image: postgres:15-alpine
+    image: postgres:18-alpine
     container_name: postgres_db
     restart: always
     environment:
@@ -59,7 +59,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/data
   
   minio:
     image: quay.io/minio/minio:latest
@@ -97,6 +97,6 @@ services:
         condition: service_healthy
 
 volumes:
-  pgdata:
-  minio_data:
-  kafka_data:
+  pg_data: ./docker/pg_data
+  minio_data: ./docker/minio_data
+  kafka_data: ./docker/kafka_data
