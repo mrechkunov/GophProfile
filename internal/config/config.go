@@ -28,7 +28,7 @@ var ConfigAddresses = Addresses{
 }
 
 func Init() {
-	ba := flag.String("a", "localhost:8080", "address to server run")
+	ba := flag.String("a", ":8080", "address to server run")
 	mp := flag.String("m", "file://migrations", "default migration PATH")
 	cs := flag.String("d", "postgres://gophprofile_user:secret@localhost/gophprofiledb?sslmode=disable", "default DBConnStr")
 	flag.Parse()
