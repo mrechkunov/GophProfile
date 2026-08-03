@@ -50,6 +50,11 @@ services:
       POSTGRES_USER: gophprofile_user
       POSTGRES_PASSWORD: secret
       POSTGRES_DB: gophprofiledb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gophprofile_user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     ports:
       - "5432:5432"
     volumes:
@@ -77,9 +82,11 @@ services:
     environment:
       - DATABASE_URI=postgres://gophprofile_user:secret@postgres/gophprofiledb?sslmode=disable
     depends_on:
-      - postgres
-      - minio
-      - kafka
+      postgres:
+        condition: service_healthy
+      minio:
+      kafka:
+        condition: service_healthy
 
 volumes:
   pgdata:
