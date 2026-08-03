@@ -25,7 +25,7 @@ COPY /migrations/* ./migrations/
 COPY --from=builder /app/gophprofile .
 
 # Указываем порт, который слушает приложение
-#EXPOSE 8080
+EXPOSE 8080
 
 # Запуск приложения
 CMD ["./gophprofile"]
