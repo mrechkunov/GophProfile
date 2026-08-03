@@ -1,0 +1,87 @@
+services:
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: kafka
+    restart: always
+    ports:
+      - "9092:9092"   # Внешний порт для проброса
+      - "29092:29092" # Внутренний порт для Docker
+    environment:
+      CLUSTER_ID: '4L62ydgTyN-G4OJgKmQgJw'
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@localhost:9093"
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,EXTERNAL://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:29092,EXTERNAL://10.254.40.123:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+    volumes:
+      - ./kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+
+
+  # Init-контейнер для создания топика my-topic
+  kafka-init:
+    image: confluentinc/cp-kafka:7.6.1
+    init: true
+    depends_on:
+      kafka:
+        condition: service_healthy # Ждем, пока Kafka запустится и проверит готовность
+    command: >
+      /bin/bash -c "
+        echo 'Ожидание готовности Kafka...' &&
+        cub kafka-ready -b kafka:9092 1 20 &&
+        echo 'Создание топика...' &&
+        kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic test-topic --partitions 1 --replication-factor 1"
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: gophprofile_user
+      POSTGRES_PASSWORD: secret
+      POSTGRES_DB: gophprofiledb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+  
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"  # S3 API
+      - "9001:9001"  # Web Console
+    environment:
+      MINIO_ROOT_USER: gophprofile_user
+      MINIO_ROOT_PASSWORD: supersecretpassword
+    volumes:
+      - minio_data:/data
+    command: server --console-address ":9001" /data
+    restart: unless-stopped
+
+  app:
+    build: .
+    container_name: gophprofile
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URI=postgres://gophprofile_user:secret@postgres/gophprofiledb?sslmode=disable
+    depends_on:
+      - postgres
+      - minio
+      - kafka
+
+volumes:
+  pgdata:
+  minio_data:
+  kafka_data:
