@@ -65,8 +65,8 @@ services:
     image: quay.io/minio/minio:latest
     container_name: minio
     ports:
-      - "9000:9000"  # S3 API
-      - "9001:9001"  # Web Console
+      - "9000:9000"
+      - "9001:9001"  
     environment:
       MINIO_ROOT_USER: gophprofile_user
       MINIO_ROOT_PASSWORD: supersecretpassword
@@ -81,24 +81,24 @@ services:
     command: server --console-address ":9001" /data
     restart: unless-stopped
 
-  app:
-    build: .
-    develop:
-      watch:
-        - action: rebuild
-          path: .
-    container_name: gophprofile
-    ports:
-      - "8080:8080"
-    environment:
-      - DATABASE_URI=postgres://gophprofile_user:secret@postgres/gophprofiledb?sslmode=disable
-    depends_on:
-      postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+  # app:
+  #   build: .
+  #   develop:
+  #     watch:
+  #       - action: rebuild
+  #         path: .
+  #   container_name: gophprofile
+  #   ports:
+  #     - "8080:8080"
+  #   environment:
+  #     - DATABASE_URI=postgres://gophprofile_user:secret@postgres/gophprofiledb?sslmode=disable
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     kafka:
+  #       condition: service_healthy
+  #     minio:
+  #       condition: service_healthy
 
 volumes:
   kafka_data:

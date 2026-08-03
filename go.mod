@@ -3,6 +3,7 @@ module gophprofile
 go 1.25.4
 
 require (
+	github.com/go-chi/chi/v5 v5.3.1
 	github.com/golang-migrate/migrate/v4 v4.19.1
 	github.com/jackc/pgx/v5 v5.5.4
 	go.uber.org/zap v1.28.0
