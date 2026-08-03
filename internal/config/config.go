@@ -22,7 +22,7 @@ type Addresses struct {
 }
 
 var ConfigAddresses = Addresses{
-	ServerBindAddress: "localhost:8080",
+	ServerBindAddress: ":8080",
 	MigrationsPath:    "",
 	DBConnStr:         "",
 }
