@@ -21,6 +21,7 @@ FROM alpine
 WORKDIR /root/
 
 # Копируем скомпилированный файл из предыдущего шага
+COPY /web/static/* ./web/static/
 COPY /migrations/* ./migrations/
 COPY --from=builder /app/gophprofile .
 

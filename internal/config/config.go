@@ -2,7 +2,6 @@ package config
 
 import (
 	"database/sql"
-	"flag"
 	"gophprofile/internal/logger"
 	"os"
 
@@ -12,64 +11,60 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-// DB connection
-var DBconn *sql.DB
-
-type Addresses struct {
-	ServerBindAddress string
-	MigrationsPath    string
-	DBConnStr         string
+// Config содержит параметры подключения из env
+type Config struct {
+	Port           string
+	MinioHost      string
+	MinioUser      string
+	MinioPass      string
+	MinioSSL       bool
+	KafkaBrokers   string
+	DBConnStr      string
+	MigrationsPath string
 }
 
-var ConfigAddresses = Addresses{
-	ServerBindAddress: ":8080",
-	MigrationsPath:    "",
-	DBConnStr:         "",
+// Load Config from env
+func LoadConfig() Config {
+	return Config{
+		Port:           getEnv("SERVER_PORT", "8080"),
+		MinioHost:      getEnv("MINIO_HOST", "localhost:9000"),
+		MinioUser:      getEnv("MINIO_ROOT_USER", "minioadmin"),
+		MinioPass:      getEnv("MINIO_ROOT_PASSWORD", "minioadmin"),
+		MinioSSL:       getEnv("MINIO_SSL", "false") == "true",
+		KafkaBrokers:   getEnv("KAFKA_BROKERS", "localhost:9092"),
+		DBConnStr:      getEnv("DATABASE_URI", "postgres://gophprofile_user:secret@postgres/gophprofiledb?sslmode=disable"),
+		MigrationsPath: getEnv("MIGRATIONS_PATH", ""),
+	}
 }
 
-func Init() {
-	ba := flag.String("a", ":8080", "address to server run")
-	mp := flag.String("m", "file://migrations", "default migration PATH")
-	cs := flag.String("d", "postgres://gophprofile_user:secret@localhost/gophprofiledb?sslmode=disable", "default DBConnStr")
-	flag.Parse()
-
-	// если переиенные окружения установленны, берем их, иначе берем флаг
-	if serverAddress, isEnvBindSrv := os.LookupEnv("RUN_ADDRESS"); isEnvBindSrv {
-		ConfigAddresses.ServerBindAddress = serverAddress
-	} else {
-		ConfigAddresses.ServerBindAddress = *ba
-	}
-
-	if migrationsPath, isEnvMigrationsPath := os.LookupEnv("MIGRATIONS_PATH"); isEnvMigrationsPath {
-		ConfigAddresses.MigrationsPath = migrationsPath
-	} else {
-		ConfigAddresses.MigrationsPath = *mp
-	}
-	if dbConnStr, isEnvDBConnStr := os.LookupEnv("DATABASE_URI"); isEnvDBConnStr {
-		ConfigAddresses.DBConnStr = dbConnStr
-	} else {
-		ConfigAddresses.DBConnStr = *cs
-	}
+func ConfigureDB(cfg Config) error {
 	// create connect to DB and run Up all migrations
-	var err error
-	DBconn, err = NewConnect()
+	DBconn, err := NewConnect(cfg.DBConnStr)
 	if err != nil {
 		logger.Log.Errorln("error while connecting to DB (configure service)", err)
+		return err
 	}
-	migrations(DBconn)
+	migrations(DBconn, &cfg)
+	err = DBconn.Close()
+	if err != nil {
+		logger.Log.Errorln("error while close DB connection after migration (configure service)", err)
+		return err
+	}
+	return nil
 }
-func NewConnect() (*sql.DB, error) {
-	db, err := sql.Open("pgx", ConfigAddresses.DBConnStr)
+
+func NewConnect(connString string) (*sql.DB, error) {
+	db, err := sql.Open("pgx", connString)
 	if err != nil {
 		logger.Log.Errorln(err)
 	}
-	return db, err
+	return db, nil
 }
 
-func migrations(DBconn *sql.DB) {
+func migrations(DBconn *sql.DB, cfg *Config) {
 	m, err := migrate.New(
-		ConfigAddresses.MigrationsPath,
-		ConfigAddresses.DBConnStr)
+		cfg.MigrationsPath,
+		cfg.DBConnStr)
 	if err != nil {
 		logger.Log.Errorln("error initializing migrate:", err)
 	}
@@ -82,4 +77,11 @@ func migrations(DBconn *sql.DB) {
 	if err != nil {
 		logger.Log.Warnln("error while ping DB after migratioans applied", err)
 	}
+}
+
+func getEnv(key, fallback string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return fallback
 }

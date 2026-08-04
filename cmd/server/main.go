@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"gophprofile/internal/config"
+	"gophprofile/internal/handler"
 	"gophprofile/internal/logger"
 	"net/http"
 	"os/signal"
@@ -15,22 +16,21 @@ import (
 )
 
 func main() {
-	config.Init()
+	cfg := config.LoadConfig()
 	// Создаем контекст для получения системных сигналов
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
 	var router = chi.NewRouter()
-	router.Get("/", logger.WithLogging(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("test"))
-	}))
+	// маршруты к хендлерам
+	router.Get("/", logger.WithLogging(handler.IndexHandler))
 
 	var server = &http.Server{
-		Addr:    config.ConfigAddresses.ServerBindAddress,
+		Addr:    cfg.Port,
 		Handler: router,
 	}
 
-	logger.Log.Infoln("server starting:", config.ConfigAddresses.ServerBindAddress, "http")
+	logger.Log.Infoln("server starting:", cfg.Port, "http")
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Log.Fatalln(err.Error())
