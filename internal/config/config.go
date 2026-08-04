@@ -3,6 +3,7 @@ package config
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"gophprofile/internal/logger"
 	"os"
 
@@ -12,6 +13,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/segmentio/kafka-go"
 )
 
 // Config содержит параметры подключения из env
@@ -29,7 +31,8 @@ type Config struct {
 type Connections struct {
 	DB          *sql.DB
 	MinioClient *minio.Client
-	// kafka client
+	//kafkaProducer *kafka.Writer
+
 	// minio client
 
 }
@@ -78,8 +81,7 @@ func configureDB(cfg Config) (*sql.DB, error) {
 }
 
 func migrations(dbConn *sql.DB, cfg *Config) {
-	// fmt.Println(cfg.MigrationsPath)
-	// fmt.Println(cfg.DBConnStr)
+
 	m, err := migrate.New(
 		cfg.MigrationsPath,
 		cfg.DBConnStr)
@@ -129,6 +131,50 @@ func configureMinIO(cfg Config) (*minio.Client, error) {
 	}
 	return minioClient, nil
 }
+func configureKafka(cfg Config) error {
+	ctx := context.Background()
+	brokerAddress := cfg.KafkaBrokers
+	topicName := "gophProfileTopic"
+
+	// Подключаемся к любому брокеру, чтобы найти контроллер
+	conn, err := kafka.DialContext(ctx, "tcp", brokerAddress)
+	if err != nil {
+		logger.Log.Errorln(err.Error())
+		return err
+	}
+	defer conn.Close()
+
+	// Получаем адрес текущего контроллера для выполнения операций администрирования
+	controller, err := conn.Controller()
+	if err != nil {
+		logger.Log.Errorln(err.Error())
+		return err
+	}
+
+	controllerConn, err := kafka.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", controller.Host, controller.Port))
+	if err != nil {
+		logger.Log.Errorln(err.Error())
+		return err
+	}
+	defer controllerConn.Close()
+
+	// Создаем конфигурацию топика
+	topicConfigs := []kafka.TopicConfig{
+		{
+			Topic:             topicName,
+			NumPartitions:     3,
+			ReplicationFactor: 1, // Для локального dev-кластера (в prod обычно >= 3)
+		},
+	}
+	// Отправляем запрос на создание
+	err = controllerConn.CreateTopics(topicConfigs...)
+	if err != nil {
+		logger.Log.Errorln(err.Error())
+		return err
+	}
+	logger.Log.Infoln("Topic", topicName, "is created sucsessfuly!")
+	return nil
+}
 
 func Init() {
 	Cfg = LoadConfig()
@@ -141,6 +187,10 @@ func Init() {
 	Conn.MinioClient, err = configureMinIO(Cfg)
 	if err != nil {
 		logger.Log.Errorln("error while minIO configure", err)
+	}
+	err = configureKafka(Cfg)
+	if err != nil {
+		logger.Log.Errorln("error while kafka configure", err)
 	}
 }
 

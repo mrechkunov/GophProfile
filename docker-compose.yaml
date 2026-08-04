@@ -28,19 +28,19 @@ services:
       retries: 5
       start_period: 5s
 
-  kafka-init:
-    image: confluentinc/cp-kafka:latest
-    container_name: kafka-init
-    depends_on:
-      kafka:
-        condition: service_healthy
-    entrypoint: [ "/bin/sh", "-c" ]
-    command: |
-      'kafka-topics --bootstrap-server kafka:29092 \
-      --create --if-not-exists \
-      --topic gophprofile \
-      --partitions 3 \
-      --replication-factor 1'
+  # kafka-init:
+  #   image: confluentinc/cp-kafka:latest
+  #   container_name: kafka-init
+  #   depends_on:
+  #     kafka:
+  #       condition: service_healthy
+  #   entrypoint: [ "/bin/sh", "-c" ]
+  #   command: |
+  #     'kafka-topics --bootstrap-server kafka:29092 \
+  #     --create --if-not-exists \
+  #     --topic gophprofile \
+  #     --partitions 3 \
+  #     --replication-factor 1'
 
   postgres:
     image: postgres:15-alpine
@@ -81,31 +81,31 @@ services:
     command: server --console-address ":9001" /data
     restart: unless-stopped
 
-  app:
-    build: .
-    develop:
-      watch:
-        - action: rebuild
-          path: .
-    container_name: gophprofile
-    ports:
-      - "8080:8080"
-    environment:
-      - SERVER_PORT=:8080
-      - DATABASE_URI=postgres://gophprofile_user:secret@postgres/gophprofiledb?sslmode=disable
-      - MINIO_HOST=localhost:9000
-      - MINIO_ROOT_USER=gophprofile_user
-      - MINIO_ROOT_PASSWORD=supersecretpassword
-      - MINIO_SSL=false
-      - KAFKA_BROKERS=localhost:9092
-      - MIGRATIONS_PATH=file://migrations
-    depends_on:
-      postgres:
-        condition: service_healthy
-      kafka:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+#   app:
+#     build: .
+#     develop:
+#       watch:
+#         - action: rebuild
+#           path: .
+#     container_name: gophprofile
+#     ports:
+#       - "8080:8080"
+#     environment:
+#       - SERVER_PORT=:8080
+#       - DATABASE_URI=postgres://gophprofile_user:secret@postgres/gophprofiledb?sslmode=disable
+#       - MINIO_HOST=localhost:9000
+#       - MINIO_ROOT_USER=gophprofile_user
+#       - MINIO_ROOT_PASSWORD=supersecretpassword
+#       - MINIO_SSL=false
+#       - KAFKA_BROKERS=localhost:9092
+#       - MIGRATIONS_PATH=file://migrations
+#     depends_on:
+#       postgres:
+#         condition: service_healthy
+#       kafka:
+#         condition: service_healthy
+#       minio:
+#         condition: service_healthy
 volumes:
   kafka_data:
   pg_data:
