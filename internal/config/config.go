@@ -1,7 +1,9 @@
 package config
 
 import (
+	"context"
 	"database/sql"
+	"fmt"
 	"gophprofile/internal/logger"
 	"os"
 
@@ -9,6 +11,8 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
 // Config содержит параметры подключения из env
@@ -23,37 +27,39 @@ type Config struct {
 	MigrationsPath string
 }
 
+type Connections struct {
+	DB          *sql.DB
+	MinioClient *minio.Client
+	// kafka client
+	// minio client
+
+}
+
+var Conn Connections
+var Cfg Config
+
+func getEnv(key, fallback string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return fallback
+}
+
 // Load Config from env
 func LoadConfig() Config {
 	return Config{
-		Port:           getEnv("SERVER_PORT", "8080"),
+		Port:           getEnv("SERVER_PORT", ":8080"),
 		MinioHost:      getEnv("MINIO_HOST", "localhost:9000"),
-		MinioUser:      getEnv("MINIO_ROOT_USER", "minioadmin"),
-		MinioPass:      getEnv("MINIO_ROOT_PASSWORD", "minioadmin"),
+		MinioUser:      getEnv("MINIO_ROOT_USER", "gophprofile_user"),
+		MinioPass:      getEnv("MINIO_ROOT_PASSWORD", "supersecretpassword"),
 		MinioSSL:       getEnv("MINIO_SSL", "false") == "true",
 		KafkaBrokers:   getEnv("KAFKA_BROKERS", "localhost:9092"),
-		DBConnStr:      getEnv("DATABASE_URI", "postgres://gophprofile_user:secret@postgres/gophprofiledb?sslmode=disable"),
-		MigrationsPath: getEnv("MIGRATIONS_PATH", ""),
+		DBConnStr:      getEnv("DATABASE_URI", "postgres://gophprofile_user:secret@localhost/gophprofiledb?sslmode=disable"),
+		MigrationsPath: getEnv("MIGRATIONS_PATH", "file://migrations"),
 	}
 }
 
-func ConfigureDB(cfg Config) error {
-	// create connect to DB and run Up all migrations
-	DBconn, err := NewConnect(cfg.DBConnStr)
-	if err != nil {
-		logger.Log.Errorln("error while connecting to DB (configure service)", err)
-		return err
-	}
-	migrations(DBconn, &cfg)
-	err = DBconn.Close()
-	if err != nil {
-		logger.Log.Errorln("error while close DB connection after migration (configure service)", err)
-		return err
-	}
-	return nil
-}
-
-func NewConnect(connString string) (*sql.DB, error) {
+func NewDBConnect(connString string) (*sql.DB, error) {
 	db, err := sql.Open("pgx", connString)
 	if err != nil {
 		logger.Log.Errorln(err)
@@ -61,7 +67,20 @@ func NewConnect(connString string) (*sql.DB, error) {
 	return db, nil
 }
 
-func migrations(DBconn *sql.DB, cfg *Config) {
+func configureDB(cfg Config) (*sql.DB, error) {
+	// create connect to DB and run Up all migrations
+	dbConn, err := NewDBConnect(cfg.DBConnStr)
+	if err != nil {
+		logger.Log.Errorln("error while connecting to DB (configure service)", err)
+		return nil, err
+	}
+	migrations(dbConn, &cfg)
+	return dbConn, nil
+}
+
+func migrations(dbConn *sql.DB, cfg *Config) {
+	fmt.Println(cfg.MigrationsPath)
+	fmt.Println(cfg.DBConnStr)
 	m, err := migrate.New(
 		cfg.MigrationsPath,
 		cfg.DBConnStr)
@@ -73,15 +92,46 @@ func migrations(DBconn *sql.DB, cfg *Config) {
 		logger.Log.Errorln("error applying migrations:", err)
 	}
 	logger.Log.Infoln("database migrations applied successfully!")
-	err = DBconn.Ping()
+	err = dbConn.Ping()
 	if err != nil {
 		logger.Log.Warnln("error while ping DB after migratioans applied", err)
 	}
 }
 
-func getEnv(key, fallback string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
+func Init() {
+	Cfg = LoadConfig()
+	var err error
+	// DB конфигурируем
+	Conn.DB, err = configureDB(Cfg)
+	if err != nil {
+		logger.Log.Errorln("error while db configere", err)
 	}
-	return fallback
+
+	// MinIO конфигурируем
+	Conn.MinioClient, err = minio.New(Cfg.MinioHost, &minio.Options{
+		Creds:  credentials.NewStaticV4(Cfg.MinioUser, Cfg.MinioPass, ""),
+		Secure: Cfg.MinioSSL,
+	})
+	if err != nil {
+		logger.Log.Errorln("error while minio client creating:", err)
+	}
+	// Создание бакета
+	ctx := context.Background()
+	bucketName := "gophprogile"
+	// Проверяем, существует ли уже бакет
+	exists, err := Conn.MinioClient.BucketExists(ctx, bucketName)
+	if err != nil {
+		logger.Log.Errorln("error while bucket test:", err)
+	}
+
+	if !exists {
+		err = Conn.MinioClient.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
+		if err != nil {
+			logger.Log.Errorln("error while bucket creating:", err)
+		}
+		logger.Log.Infoln("bucket", bucketName, "is created sucsessfully!")
+	} else {
+		logger.Log.Infoln("bucket", bucketName, "is already exist.")
+	}
+
 }

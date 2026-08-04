@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	cfg := config.LoadConfig()
+	config.Init()
 	// Создаем контекст для получения системных сигналов
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
@@ -26,11 +26,11 @@ func main() {
 	router.Get("/", logger.WithLogging(handler.IndexHandler))
 
 	var server = &http.Server{
-		Addr:    cfg.Port,
+		Addr:    config.Cfg.Port,
 		Handler: router,
 	}
 
-	logger.Log.Infoln("server starting:", cfg.Port, "http")
+	logger.Log.Infoln("server starting:", config.Cfg.Port, "http")
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Log.Fatalln(err.Error())
@@ -47,7 +47,8 @@ func main() {
 	} else {
 		logger.Log.Infoln("Сервер остановлен корректно.")
 	}
-	config.DBconn.Close()
+
+	config.Conn.DB.Close()
 	err := logger.Log.Sync()
 	if err != nil && !errors.Is(err, syscall.EBADF) && !errors.Is(err, syscall.ENOTTY) {
 		fmt.Println("error while zapLogger Sync in init function", err)
