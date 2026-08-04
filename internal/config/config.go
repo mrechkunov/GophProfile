@@ -3,7 +3,6 @@ package config
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"gophprofile/internal/logger"
 	"os"
 
@@ -79,8 +78,8 @@ func configureDB(cfg Config) (*sql.DB, error) {
 }
 
 func migrations(dbConn *sql.DB, cfg *Config) {
-	fmt.Println(cfg.MigrationsPath)
-	fmt.Println(cfg.DBConnStr)
+	// fmt.Println(cfg.MigrationsPath)
+	// fmt.Println(cfg.DBConnStr)
 	m, err := migrate.New(
 		cfg.MigrationsPath,
 		cfg.DBConnStr)
@@ -98,40 +97,73 @@ func migrations(dbConn *sql.DB, cfg *Config) {
 	}
 }
 
+func configureMinIO(cfg Config) (*minio.Client, error) {
+	// MinIO конфигурируем
+	minioClient, err := minio.New(cfg.MinioHost, &minio.Options{
+		Creds:  credentials.NewStaticV4(cfg.MinioUser, cfg.MinioPass, ""),
+		Secure: cfg.MinioSSL,
+	})
+	if err != nil {
+		logger.Log.Errorln("error while minio client creating:", err)
+		return nil, err
+	}
+	// Создание бакета
+	ctx := context.Background()
+	bucketName := "gophprogile"
+	// Проверяем, существует ли уже бакет
+	exists, err := minioClient.BucketExists(ctx, bucketName)
+	if err != nil {
+		logger.Log.Errorln("error while bucket test:", err)
+		return nil, err
+	}
+
+	if !exists {
+		err = minioClient.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
+		if err != nil {
+			logger.Log.Errorln("error while bucket creating:", err)
+			return nil, err
+		}
+		logger.Log.Infoln("bucket", bucketName, "is created sucsessfully!")
+	} else {
+		logger.Log.Infoln("bucket", bucketName, "is already exist.")
+	}
+	return minioClient, nil
+}
+
 func Init() {
 	Cfg = LoadConfig()
 	var err error
 	// DB конфигурируем
 	Conn.DB, err = configureDB(Cfg)
 	if err != nil {
-		logger.Log.Errorln("error while db configere", err)
+		logger.Log.Errorln("error while db configure", err)
 	}
-
-	// MinIO конфигурируем
-	Conn.MinioClient, err = minio.New(Cfg.MinioHost, &minio.Options{
-		Creds:  credentials.NewStaticV4(Cfg.MinioUser, Cfg.MinioPass, ""),
-		Secure: Cfg.MinioSSL,
-	})
+	Conn.MinioClient, err = configureMinIO(Cfg)
 	if err != nil {
-		logger.Log.Errorln("error while minio client creating:", err)
+		logger.Log.Errorln("error while minIO configure", err)
 	}
-	// Создание бакета
-	ctx := context.Background()
-	bucketName := "gophprogile"
-	// Проверяем, существует ли уже бакет
-	exists, err := Conn.MinioClient.BucketExists(ctx, bucketName)
-	if err != nil {
-		logger.Log.Errorln("error while bucket test:", err)
-	}
-
-	if !exists {
-		err = Conn.MinioClient.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
-		if err != nil {
-			logger.Log.Errorln("error while bucket creating:", err)
-		}
-		logger.Log.Infoln("bucket", bucketName, "is created sucsessfully!")
-	} else {
-		logger.Log.Infoln("bucket", bucketName, "is already exist.")
-	}
-
 }
+
+// // Настройка продюсера (Writer)
+// 	writer := &kafka.Writer{
+// 		Addr:     kafka.TCP("localhost:9092"), // Адрес вашего Kafka-брокера
+// 		Topic:    "my-topic",
+// 		Balancer: &kafka.LeastBytes{}, // Алгоритм распределения по партициям
+// 	}
+// 	defer writer.Close()
+
+// 	ctx := context.Background()
+
+// 	// Отправка сообщения
+// 	msg := kafka.Message{
+// 		Key:   []byte("key-1"),
+// 		Value: []byte("Привет, мир из Go!"),
+// 	}
+
+// 	err := writer.WriteMessages(ctx, msg)
+// 	if err != nil {
+// 		log.Fatalf("Ошибка отправки сообщения: %v\n", err)
+// 	}
+
+// 	fmt.Println("Сообщение успешно отправлено в Kafka")
+// }
