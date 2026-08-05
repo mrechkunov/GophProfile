@@ -24,6 +24,7 @@ func main() {
 	var router = chi.NewRouter()
 	// маршруты к хендлерам
 	router.Get("/", logger.WithLogging(handler.IndexHandler))
+	router.Post("/api/v1/avatars", logger.WithLogging(handler.PostUploadAvatarHandler))
 
 	var server = &http.Server{
 		Addr:    config.Cfg.Port,

@@ -111,7 +111,7 @@ func configureMinIO(cfg Config) (*minio.Client, error) {
 	}
 	// Создание бакета
 	ctx := context.Background()
-	bucketName := "gophprogile"
+	bucketName := "avatars"
 	// Проверяем, существует ли уже бакет
 	exists, err := minioClient.BucketExists(ctx, bucketName)
 	if err != nil {
@@ -134,7 +134,7 @@ func configureMinIO(cfg Config) (*minio.Client, error) {
 func configureKafka(cfg Config) error {
 	ctx := context.Background()
 	brokerAddress := cfg.KafkaBrokers
-	topicName := "gophProfileTopic"
+	topicName := "avatar-resize-tasks"
 
 	// Подключаемся к любому брокеру, чтобы найти контроллер
 	conn, err := kafka.DialContext(ctx, "tcp", brokerAddress)
