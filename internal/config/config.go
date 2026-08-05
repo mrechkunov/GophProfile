@@ -10,6 +10,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	_ "github.com/jackc/pgx/v5"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -29,12 +30,9 @@ type Config struct {
 }
 
 type Connections struct {
-	DB          *sql.DB
-	MinioClient *minio.Client
-	//kafkaProducer *kafka.Writer
-
-	// minio client
-
+	DB            *sql.DB
+	MinioClient   *minio.Client
+	KafkaProducer *kafka.Writer
 }
 
 var Conn Connections
@@ -81,7 +79,6 @@ func configureDB(cfg Config) (*sql.DB, error) {
 }
 
 func migrations(dbConn *sql.DB, cfg *Config) {
-
 	m, err := migrate.New(
 		cfg.MigrationsPath,
 		cfg.DBConnStr)
@@ -131,7 +128,7 @@ func configureMinIO(cfg Config) (*minio.Client, error) {
 	}
 	return minioClient, nil
 }
-func configureKafka(cfg Config) error {
+func configureKafka(cfg Config) (*kafka.Writer, error) {
 	ctx := context.Background()
 	brokerAddress := cfg.KafkaBrokers
 	topicName := "avatar-resize-tasks"
@@ -140,7 +137,7 @@ func configureKafka(cfg Config) error {
 	conn, err := kafka.DialContext(ctx, "tcp", brokerAddress)
 	if err != nil {
 		logger.Log.Errorln(err.Error())
-		return err
+		return nil, err
 	}
 	defer conn.Close()
 
@@ -148,13 +145,13 @@ func configureKafka(cfg Config) error {
 	controller, err := conn.Controller()
 	if err != nil {
 		logger.Log.Errorln(err.Error())
-		return err
+		return nil, err
 	}
 
 	controllerConn, err := kafka.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", controller.Host, controller.Port))
 	if err != nil {
 		logger.Log.Errorln(err.Error())
-		return err
+		return nil, err
 	}
 	defer controllerConn.Close()
 
@@ -170,10 +167,16 @@ func configureKafka(cfg Config) error {
 	err = controllerConn.CreateTopics(topicConfigs...)
 	if err != nil {
 		logger.Log.Errorln(err.Error())
-		return err
+		return nil, err
 	}
 	logger.Log.Infoln("Topic", topicName, "is created sucsessfuly!")
-	return nil
+
+	// Настройка продюсера (Writer)
+	writer := &kafka.Writer{
+		Addr:     kafka.TCP(cfg.KafkaBrokers), // Адрес вашего Kafka-брокера
+		Balancer: &kafka.LeastBytes{},         // Алгоритм распределения по партициям
+	}
+	return writer, nil
 }
 
 func Init() {
@@ -188,7 +191,7 @@ func Init() {
 	if err != nil {
 		logger.Log.Errorln("error while minIO configure", err)
 	}
-	err = configureKafka(Cfg)
+	Conn.KafkaProducer, err = configureKafka(Cfg)
 	if err != nil {
 		logger.Log.Errorln("error while kafka configure", err)
 	}

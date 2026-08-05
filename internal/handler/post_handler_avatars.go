@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"gophprofile/internal/config"
@@ -39,7 +38,7 @@ type SizeErrorResponse struct {
 	MaxSize int64  `json:"max_size"`
 }
 
-// UploadAvatarHandler обрабатывает загрузку, сохраняет в MinIO и отправляет задачу в Kafka
+// PostUploadAvatarHandler обрабатывает загрузку, сохраняет в MinIO и отправляет задачу в Kafka
 func PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -55,11 +54,18 @@ func PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Ограничиваем максимальный размер тела запроса сверху
 	r.Body = http.MaxBytesReader(w, r.Body, MaxFileSize)
 
 	if err := r.ParseMultipartForm(MaxFileSize); err != nil {
-		w.WriteHeader(http.StatusRequestEntityTooLarge)
-		json.NewEncoder(w).Encode(SizeErrorResponse{Error: "File too large", MaxSize: MaxFileSize})
+		// ИСПРАВЛЕНО: проверяем, была ли ошибка вызвана именно превышением размера
+		if strings.Contains(err.Error(), "request body too large") {
+			w.WriteHeader(http.StatusRequestEntityTooLarge)
+			json.NewEncoder(w).Encode(SizeErrorResponse{Error: "File too large", MaxSize: MaxFileSize})
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid multipart form", Details: err.Error()})
 		return
 	}
 
@@ -87,24 +93,22 @@ func PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Генерация уникального ID для аватара и имени объекта в S3
 	avatarID := uuid.New().String()
 	objectKey := fmt.Sprintf("originals/%s%s", avatarID, ext)
 
-	// Загрузка оригинального файла в MinIO
-	_, err = config.Conn.MinioClient.PutObject(context.Background(), BucketName, objectKey, file, fileHeader.Size, minio.PutObjectOptions{
+	// ИСПРАВЛЕНО: Передаем r.Context() вместо context.Background() для своевременной отмены операции
+	_, err = config.Conn.MinioClient.PutObject(r.Context(), BucketName, objectKey, file, fileHeader.Size, minio.PutObjectOptions{
 		ContentType: fileHeader.Header.Get("Content-Type"),
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to save file to storage"})
+		logger.Log.Errorln("error while putting object into minio", err)
 		return
 	}
 
-	// URL, по которому файл будет доступен
 	avatarURL := fmt.Sprintf("/%s/%s", BucketName, objectKey)
 
-	// Формирование сообщения для Kafka
 	task := model.AvatarResizeTask{
 		AvatarID:   avatarID,
 		UserID:     userID,
@@ -120,17 +124,10 @@ func PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Отправка сообщения в Kafka асинхронно
-	// Настройка продюсера (Writer)
-	writer := &kafka.Writer{
-		Addr: kafka.TCP(config.Cfg.KafkaBrokers), // Адрес вашего Kafka-брокера
-		//Topic:    KafkaTopic,
-		Balancer: &kafka.LeastBytes{}, // Алгоритм распределения по партициям
-	}
-	defer writer.Close()
-	err = writer.WriteMessages(context.Background(), kafka.Message{
+	// ИСПРАВЛЕНО: Использование r.Context() вместо context.Background()
+	err = config.Conn.KafkaProducer.WriteMessages(r.Context(), kafka.Message{
 		Topic: KafkaTopic,
-		Key:   []byte(userID), // Партиционирование по UserID гарантирует последовательность
+		Key:   []byte(userID),
 		Value: taskBytes,
 	})
 	if err != nil {
@@ -140,9 +137,8 @@ func PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: записать данные в БД
+	// TODO: записать данные в БД со статусом "processing"
 
-	// Успешный ответ 201 Created
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(AvatarResponse{
 		ID:        avatarID,

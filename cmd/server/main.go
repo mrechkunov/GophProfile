@@ -50,6 +50,7 @@ func main() {
 	}
 
 	config.Conn.DB.Close()
+	config.Conn.KafkaProducer.Close()
 	err := logger.Log.Sync()
 	if err != nil && !errors.Is(err, syscall.EBADF) && !errors.Is(err, syscall.ENOTTY) {
 		fmt.Println("error while zapLogger Sync in init function", err)
