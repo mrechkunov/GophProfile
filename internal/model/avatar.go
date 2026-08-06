@@ -24,11 +24,16 @@ func (t *Thumbnails) Scan(value interface{}) error {
 }
 
 type Avatar struct {
-	ID         string     `db:"id"`
-	UserID     string     `db:"user_id"`
-	OriginURL  string     `db:"origin_url"`
-	Thumbnails Thumbnails `db:"thumbnails"`
-	Status     string     `db:"status"`
-	CreatedAt  time.Time  `db:"created_at"`
-	UpdatedAt  time.Time  `db:"updated_at"`
+	UUID              string     `db:"uuid"`
+	UserID            string     `db:"user_id"`
+	FileName          string     `db:"file_name"`
+	MimeType          string     `db:"mime_type"`
+	SizeBytes         int64      `db:"size_bytes"`
+	S3Key             string     `db:"s3_key"`
+	Thumbnail_S3_Keys Thumbnails `db:"thumbnail_s3_keys"`
+	UploadStatus      string     `db:"upload_status"`
+	ProcessingStatus  string     `db:"processing_status"`
+	CreatedAt         time.Time  `db:"created_at"`
+	UpdatedAt         time.Time  `db:"updated_at"`
+	DeletedAt         time.Time  `db:"deleted_at"`
 }

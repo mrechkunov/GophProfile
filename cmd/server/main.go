@@ -16,7 +16,7 @@ import (
 )
 
 func main() {
-	config.Init()
+	config.InitServer()
 	// Создаем контекст для получения системных сигналов
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
@@ -27,11 +27,11 @@ func main() {
 	router.Post("/api/v1/avatars", logger.WithLogging(handler.PostUploadAvatarHandler))
 
 	var server = &http.Server{
-		Addr:    config.Cfg.Port,
+		Addr:    config.CfgServer.Port,
 		Handler: router,
 	}
 
-	logger.Log.Infoln("server starting:", config.Cfg.Port, "http")
+	logger.Log.Infoln("server starting:", config.CfgServer.Port, "http")
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Log.Fatalln(err.Error())
@@ -49,8 +49,8 @@ func main() {
 		logger.Log.Infoln("Сервер остановлен корректно.")
 	}
 
-	config.Conn.DB.Close()
-	config.Conn.KafkaProducer.Close()
+	config.ConnServer.DB.Close()
+	config.ConnServer.KafkaProducer.Close()
 	err := logger.Log.Sync()
 	if err != nil && !errors.Is(err, syscall.EBADF) && !errors.Is(err, syscall.ENOTTY) {
 		fmt.Println("error while zapLogger Sync in init function", err)

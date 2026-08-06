@@ -35,8 +35,10 @@ type Connections struct {
 	KafkaProducer *kafka.Writer
 }
 
-var Conn Connections
-var Cfg Config
+var ConnServer Connections
+var ConnWorker Connections
+var CfgServer Config
+var CfgWorker Config
 
 func getEnv(key, fallback string) string {
 	if value, exists := os.LookupEnv(key); exists {
@@ -179,44 +181,44 @@ func configureKafka(cfg Config) (*kafka.Writer, error) {
 	return writer, nil
 }
 
-func Init() {
-	Cfg = LoadConfig()
+func InitServer() {
+	CfgServer = LoadConfig()
 	var err error
 	// DB конфигурируем
-	Conn.DB, err = configureDB(Cfg)
+	ConnServer.DB, err = configureDB(CfgServer)
 	if err != nil {
 		logger.Log.Errorln("error while db configure", err)
 	}
-	Conn.MinioClient, err = configureMinIO(Cfg)
+	ConnServer.MinioClient, err = configureMinIO(CfgServer)
 	if err != nil {
 		logger.Log.Errorln("error while minIO configure", err)
 	}
-	Conn.KafkaProducer, err = configureKafka(Cfg)
+	ConnServer.KafkaProducer, err = configureKafka(CfgServer)
 	if err != nil {
 		logger.Log.Errorln("error while kafka configure", err)
 	}
 }
-
-// // Настройка продюсера (Writer)
-// 	writer := &kafka.Writer{
-// 		Addr:     kafka.TCP("localhost:9092"), // Адрес вашего Kafka-брокера
-// 		Topic:    "my-topic",
-// 		Balancer: &kafka.LeastBytes{}, // Алгоритм распределения по партициям
-// 	}
-// 	defer writer.Close()
-
-// 	ctx := context.Background()
-
-// 	// Отправка сообщения
-// 	msg := kafka.Message{
-// 		Key:   []byte("key-1"),
-// 		Value: []byte("Привет, мир из Go!"),
-// 	}
-
-// 	err := writer.WriteMessages(ctx, msg)
-// 	if err != nil {
-// 		log.Fatalf("Ошибка отправки сообщения: %v\n", err)
-// 	}
-
-// 	fmt.Println("Сообщение успешно отправлено в Kafka")
-// }
+func InitWorker() {
+	CfgWorker = LoadConfig()
+	var err error
+	// create connect to DB
+	ConnWorker.DB, err = NewDBConnect(CfgWorker.DBConnStr)
+	if err != nil {
+		logger.Log.Errorln("error while connecting to DB (configure service)", err)
+		return
+	}
+	// MinIO конфигурируем
+	ConnWorker.MinioClient, err = minio.New(CfgWorker.MinioHost, &minio.Options{
+		Creds:  credentials.NewStaticV4(CfgWorker.MinioUser, CfgWorker.MinioPass, ""),
+		Secure: CfgWorker.MinioSSL,
+	})
+	if err != nil {
+		logger.Log.Errorln("error while minio client creating:", err)
+		return
+	}
+	// Настройка продюсера
+	ConnWorker.KafkaProducer = &kafka.Writer{
+		Addr:     kafka.TCP(CfgWorker.KafkaBrokers),
+		Balancer: &kafka.LeastBytes{},
+	}
+}

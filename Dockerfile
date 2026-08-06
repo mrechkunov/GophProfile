@@ -14,7 +14,7 @@ COPY . .
 
 # Компилируем бинарник (CGO отключен для статической линковки)
 RUN CGO_ENABLED=0 GOOS=linux go build -o gophprofile ./cmd/server/main.go
-
+RUN CGO_ENABLED=0 GOOS=linux go build -o worker ./cmd/worker/main.go
 # --- Этап 2: Финальный образ ---
 FROM alpine
 
@@ -24,9 +24,10 @@ WORKDIR /root/
 COPY /web/static/* ./web/static/
 COPY /migrations/* ./migrations/
 COPY --from=builder /app/gophprofile .
+COPY --from=builder /app/worker .
 
 # Указываем порт, который слушает приложение
 EXPOSE 8080
 
 # Запуск приложения
-CMD ["./gophprofile"]
+CMD ["sh", "-c", "./gophprofile & ./worker"]

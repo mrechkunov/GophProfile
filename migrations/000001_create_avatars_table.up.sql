@@ -2,7 +2,7 @@
 -- Создание таблицы аватаров
 
 CREATE TABLE IF NOT EXISTS avatars (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id VARCHAR(255) NOT NULL,
     file_name VARCHAR(255) NOT NULL,
     mime_type VARCHAR(100) NOT NULL,
