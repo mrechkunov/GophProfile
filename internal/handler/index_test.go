@@ -26,25 +26,25 @@ func TestIndexHandler_Success(t *testing.T) {
 		t.Fatalf("Не удалось создать тестовый файл: %v", err)
 	}
 
-	// 1. Создаем тестовый HTTP-запрос (метод GET, эндпоинт "/")
+	// Создаем тестовый HTTP-запрос (метод GET, эндпоинт "/")
 	req, err := http.NewRequest("GET", "/", nil)
 	if err != nil {
 		t.Fatalf("Не удалось создать запрос: %v", err)
 	}
 
-	// 2. Создаем ResponseRecorder для записи ответа сервера
+	// Создаем ResponseRecorder для записи ответа сервера
 	rr := httptest.NewRecorder()
 
-	// 3. Вызываем тестируемый обработчик напрямую
+	// Вызываем тестируемый обработчик напрямую
 	handler := http.HandlerFunc(handler.IndexHandler)
 	handler.ServeHTTP(rr, req)
 
-	// 4. Проверяем HTTP-статус ответа (должен быть 200 OK)
+	// Проверяем HTTP-статус ответа (должен быть 200 OK)
 	if status := rr.Code; status != http.StatusOK {
 		t.Errorf("Обработчик вернул неверный статус: получили %v, ожидали %v", status, http.StatusOK)
 	}
 
-	// 5. Проверяем содержимое ответа
+	// Проверяем содержимое ответа
 	expectedContentType := "text/html; charset=utf-8"
 	if contentType := rr.Header().Get("Content-Type"); contentType != expectedContentType {
 		t.Errorf("Неверный Content-Type: получили %v, ожидали %v", contentType, expectedContentType)

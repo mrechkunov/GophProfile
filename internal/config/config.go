@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
 	"gophprofile/internal/logger"
 	"os"
 
@@ -16,6 +17,9 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/segmentio/kafka-go"
 )
+
+const KafkaResizeTopic = "avatar-resize-tasks"
+const KafkaDeleteTopic = "avatar-delete-tasks"
 
 // Config содержит параметры подключения из env
 type Config struct {
@@ -133,7 +137,6 @@ func configureMinIO(cfg Config) (*minio.Client, error) {
 func configureKafka(cfg Config) (*kafka.Writer, error) {
 	ctx := context.Background()
 	brokerAddress := cfg.KafkaBrokers
-	topicName := "avatar-resize-tasks"
 
 	// Подключаемся к любому брокеру, чтобы найти контроллер
 	conn, err := kafka.DialContext(ctx, "tcp", brokerAddress)
@@ -160,9 +163,14 @@ func configureKafka(cfg Config) (*kafka.Writer, error) {
 	// Создаем конфигурацию топика
 	topicConfigs := []kafka.TopicConfig{
 		{
-			Topic:             topicName,
+			Topic:             KafkaResizeTopic,
 			NumPartitions:     3,
-			ReplicationFactor: 1, // Для локального dev-кластера (в prod обычно >= 3)
+			ReplicationFactor: 1,
+		},
+		{
+			Topic:             KafkaDeleteTopic,
+			NumPartitions:     3,
+			ReplicationFactor: 1,
 		},
 	}
 	// Отправляем запрос на создание
@@ -171,7 +179,7 @@ func configureKafka(cfg Config) (*kafka.Writer, error) {
 		logger.Log.Errorln(err.Error())
 		return nil, err
 	}
-	logger.Log.Infoln("Topic", topicName, "is created sucsessfuly!")
+	logger.Log.Infoln("Topics", KafkaResizeTopic, KafkaResizeTopic, "are created sucsessfuly!")
 
 	// Настройка продюсера (Writer)
 	writer := &kafka.Writer{

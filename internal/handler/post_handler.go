@@ -6,7 +6,6 @@ import (
 	"gophprofile/internal/config"
 	"gophprofile/internal/logger"
 	"gophprofile/internal/model"
-	"gophprofile/internal/repository"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -17,29 +16,8 @@ import (
 	"github.com/segmentio/kafka-go"
 )
 
-const MaxFileSize = 10 * 1024 * 1024
-const BucketName = "avatars"
-const KafkaTopic = "avatar-resize-tasks"
-
-type AvatarResponse struct {
-	ID        string    `json:"id"`
-	UserID    string    `json:"user_id"`
-	URL       string    `json:"url"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-type ErrorResponse struct {
-	Error   string `json:"error"`
-	Details string `json:"details,omitempty"`
-}
-
-type SizeErrorResponse struct {
-	Error   string `json:"error"`
-	MaxSize int64  `json:"max_size"`
-}
-
-func PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
+// POST /api/v1/avatars
+func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
 	if r.Method != http.MethodPost {
@@ -55,6 +33,7 @@ func PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, MaxFileSize)
+	defer r.Body.Close()
 
 	if err := r.ParseMultipartForm(MaxFileSize); err != nil {
 		if strings.Contains(err.Error(), "request body too large") {
@@ -81,14 +60,13 @@ func PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Валидация Magic Bytes (Защита от подмены расширения)
 	buff := make([]byte, 512)
 	if _, err = file.Read(buff); err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to read file header"})
 		return
 	}
-	// Возвращаем указатель чтения в начало файла для последующей отправки в S3
+
 	if _, err = file.Seek(0, 0); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Internal file seeking error"})
@@ -111,7 +89,6 @@ func PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Дополнительно проверяем расширение имени файла
 	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
 	if ext != ".jpeg" && ext != ".jpg" && ext != ".png" && ext != ".webp" {
 		w.WriteHeader(http.StatusBadRequest)
@@ -122,8 +99,24 @@ func PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 	avatarID := uuid.New().String()
 	objectKey := fmt.Sprintf("originals/%s%s", avatarID, ext)
 
-	// Загрузка в MinIO
-	_, err = config.ConnServer.MinioClient.PutObject(r.Context(), BucketName, objectKey, file, fileHeader.Size, minio.PutObjectOptions{
+	var s3Uploaded bool
+	var dbCreated bool
+
+	defer func() {
+		if !s3Uploaded && !dbCreated {
+			return
+		}
+		// Запускаем очистку ресурсов при сбое
+		if s3Uploaded {
+			_ = h.s3.RemoveObject(r.Context(), BucketName, objectKey, minio.RemoveObjectOptions{})
+		}
+		if dbCreated {
+			// Вызываем SoftDelete вместо жесткого удаления строки
+			_, _ = h.repo.SoftDelete(r.Context(), avatarID)
+		}
+	}()
+
+	_, err = h.s3.PutObject(r.Context(), BucketName, objectKey, file, fileHeader.Size, minio.PutObjectOptions{
 		ContentType: realContentType,
 	})
 	if err != nil {
@@ -132,19 +125,10 @@ func PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 		logger.Log.Errorln("error while putting object into minio", err)
 		return
 	}
-
-	// Механизм автоматического отката (Rollback) изменений в MinIO при ошибках ниже
-	var success bool
-	defer func() {
-		if !success {
-			// Если до конца функции success останется false — удаляем файл
-			_ = config.ConnServer.MinioClient.RemoveObject(r.Context(), BucketName, objectKey, minio.RemoveObjectOptions{})
-		}
-	}()
+	s3Uploaded = true
 
 	avatarURL := fmt.Sprintf("/%s/%s", BucketName, objectKey)
 
-	// Запись метаданных в PostgreSQL
 	avatar := model.Avatar{
 		UUID:             avatarID,
 		UserID:           userID,
@@ -156,16 +140,15 @@ func PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 		ProcessingStatus: "processing",
 	}
 
-	storage := repository.NewPostgresAvatarRepository(config.ConnServer.DB)
-	err = storage.Create(r.Context(), &avatar)
+	err = h.repo.Create(r.Context(), &avatar)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to save avatar metadata"})
 		logger.Log.Warnln("error while write new avatar in db", err)
 		return
 	}
+	dbCreated = true
 
-	// Публикация задачи в Kafka
 	task := model.AvatarResizeTask{
 		AvatarID:   avatarID,
 		UserID:     userID,
@@ -177,24 +160,24 @@ func PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 	taskBytes, err := json.Marshal(task)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Internal event serialization error"})
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "internal event serialization error"})
 		return
 	}
 
-	err = config.ConnServer.KafkaProducer.WriteMessages(r.Context(), kafka.Message{
-		Topic: KafkaTopic,
+	err = h.kafka.WriteMessages(r.Context(), kafka.Message{
+		Topic: config.KafkaResizeTopic,
 		Key:   []byte(userID),
 		Value: taskBytes,
 	})
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to dispatch async task"})
-		logger.Log.Errorln("error while send message in kafka(POST /api/v1/avatars)", err)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "failed to dispatch async task"})
+		logger.Log.Errorln("error while send message in kafka (POST /api/v1/avatars)", err)
 		return
 	}
 
-	// Все этапы выполнены без ошибок, сбрасываем триггер удаления файла
-	success = true
+	s3Uploaded = false
+	dbCreated = false
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(AvatarResponse{

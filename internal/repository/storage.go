@@ -1,20 +1,26 @@
-// internal/repository/avatar.go
 package repository
 
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+
 	"gophprofile/internal/config"
 	"gophprofile/internal/model"
 	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/stretchr/testify/mock"
 )
 
 type AvatarRepository interface {
 	Create(ctx context.Context, avatar *model.Avatar) error
-	UpdateStatus(ctx context.Context, id string, status string, thumbnails model.Thumbnails) error
+	UpdateStatus(ctx context.Context, id string, status string, thumbnails []byte) error
+	SoftDelete(ctx context.Context, id string) (*model.Avatar, error)
+	GetByID(ctx context.Context, avatarID string) (*model.Avatar, error)
 	GetByUserID(ctx context.Context, userID string) (*model.Avatar, error)
-	//delete
+	Ping(ctx context.Context) error
 }
 
 type PostgresAvatarRepository struct {
@@ -63,30 +69,147 @@ func (r *PostgresAvatarRepository) UpdateStatus(ctx context.Context, id string, 
 	return nil
 }
 
-// // GetByUserID находит последний активный аватар пользователя
-// func (r *PostgresAvatarRepository) GetByUserID(ctx context.Context, userID string) (*model.Avatar, error) {
-// 	query := `
-// 		SELECT id, user_id, origin_url, thumbnails, status, created_at, updated_at
-// 		FROM avatars
-// 		WHERE user_id = $1
-// 		ORDER BY created_at DESC
-// 		LIMIT 1
-// 	`
-// 	var avatar model.Avatar
-// 	err := r.db.QueryRowContext(ctx, query, userID).Scan(
-// 		&avatar.UUID,
-// 		&avatar.UserID,
-// 		&avatar.OriginURL,
-// 		&avatar.Thumbnails,
-// 		&avatar.,
-// 		&avatar.CreatedAt,
-// 		&avatar.UpdatedAt,
-// 	)
-// 	if err == sql.ErrNoRows {
-// 		return nil, nil // Аватар не найден
-// 	}
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return &avatar, nil
-// }
+// SoftDelete помечает аватар удаленным и возвращает его ключи S3 для последующей очистки
+func (r *PostgresAvatarRepository) SoftDelete(ctx context.Context, id string) (*model.Avatar, error) {
+	sqlStatement := `
+		UPDATE avatars 
+		SET deleted_at = NOW(), updated_at = NOW() 
+		WHERE uuid = $1 AND deleted_at IS NULL
+		RETURNING uuid, user_id, s3_key, thumbnail_s3_keys
+	`
+
+	var avatar model.Avatar
+	err := r.db.QueryRowContext(ctx, sqlStatement, id).Scan(
+		&avatar.UUID,
+		&avatar.UserID,
+		&avatar.S3Key,
+		&avatar.Thumbnail_S3_Keys,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errors.New("avatar not found")
+		}
+		return nil, err
+	}
+
+	return &avatar, nil
+}
+
+// GetByID находит аватарку по её уникальному UUID
+func (r *PostgresAvatarRepository) GetByID(ctx context.Context, avatarID string) (*model.Avatar, error) {
+	sqlStatement := `
+		SELECT uuid, user_id, file_name, mime_type, size_bytes, s3_key, 
+		       thumbnail_s3_keys, upload_status, processing_status, 
+		       created_at, updated_at
+		FROM avatars
+		WHERE uuid = $1 AND deleted_at IS NULL
+	`
+
+	var avatar model.Avatar
+	err := r.db.QueryRowContext(ctx, sqlStatement, avatarID).Scan(
+		&avatar.UUID,
+		&avatar.UserID,
+		&avatar.FileName,
+		&avatar.MimeType,
+		&avatar.SizeBytes,
+		&avatar.S3Key,
+		&avatar.Thumbnail_S3_Keys,
+		&avatar.UploadStatus,
+		&avatar.ProcessingStatus,
+		&avatar.CreatedAt,
+		&avatar.UpdatedAt,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errors.New("avatar not found")
+		}
+		return nil, err
+	}
+
+	return &avatar, nil
+}
+
+// GetByUserID находит актуальную аватарку конкретного пользователя
+func (r *PostgresAvatarRepository) GetByUserID(ctx context.Context, userID string) (*model.Avatar, error) {
+	sqlStatement := `
+		SELECT uuid, user_id, file_name, mime_type, size_bytes, s3_key, 
+		       thumbnail_s3_keys, upload_status, processing_status, 
+		       created_at, updated_at
+		FROM avatars
+		WHERE user_id = $1 AND deleted_at IS NULL
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+
+	var avatar model.Avatar
+	err := r.db.QueryRowContext(ctx, sqlStatement, userID).Scan(
+		&avatar.UUID,
+		&avatar.UserID,
+		&avatar.FileName,
+		&avatar.MimeType,
+		&avatar.SizeBytes,
+		&avatar.S3Key,
+		&avatar.Thumbnail_S3_Keys,
+		&avatar.UploadStatus,
+		&avatar.ProcessingStatus,
+		&avatar.CreatedAt,
+		&avatar.UpdatedAt,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errors.New("avatar not found")
+		}
+		return nil, err
+	}
+
+	return &avatar, nil
+}
+
+func (r *PostgresAvatarRepository) Ping(ctx context.Context) error {
+	return r.db.PingContext(ctx)
+}
+
+type MockAvatarRepository struct {
+	mock.Mock
+}
+
+func (m *MockAvatarRepository) Create(ctx context.Context, avatar *model.Avatar) error {
+	args := m.Called(ctx, avatar)
+	return args.Error(0)
+}
+func (m *MockAvatarRepository) UpdateStatus(ctx context.Context, id string, status string, thumbnailsJSON []byte) error {
+	args := m.Called(ctx, id, status, thumbnailsJSON)
+	return args.Error(0)
+}
+
+func (m *MockAvatarRepository) Ping(ctx context.Context) error {
+	args := m.Called(ctx)
+	return args.Error(0)
+}
+
+func (m *MockAvatarRepository) GetByID(ctx context.Context, avatarID string) (*model.Avatar, error) {
+	args := m.Called(ctx, avatarID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.Avatar), args.Error(1)
+}
+
+func (m *MockAvatarRepository) GetByUserID(ctx context.Context, userID string) (*model.Avatar, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.Avatar), args.Error(1)
+}
+
+func (m *MockAvatarRepository) SoftDelete(ctx context.Context, id string) (*model.Avatar, error) {
+	args := m.Called(ctx, id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*model.Avatar), args.Error(1)
+}

@@ -7,6 +7,7 @@ import (
 	"gophprofile/internal/config"
 	"gophprofile/internal/handler"
 	"gophprofile/internal/logger"
+	"gophprofile/internal/repository"
 	"net/http"
 	"os/signal"
 	"syscall"
@@ -21,11 +22,30 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
-	var router = chi.NewRouter()
-	// маршруты к хендлерам
-	router.Get("/", logger.WithLogging(handler.IndexHandler))
-	router.Post("/api/v1/avatars", logger.WithLogging(handler.PostUploadAvatarHandler))
+	repo := repository.NewPostgresAvatarRepository(config.ConnServer.DB)
+	kafkaAdapter := &repository.KafkaProducer{
+		Writer: config.ConnServer.KafkaProducer,
+	}
+	// Создаем хэндлер и передаем зависимости
+	avatarHandler := handler.NewAvatarHandler(
+		repo,
+		config.ConnServer.MinioClient,
+		kafkaAdapter,
+	)
 
+	var router = chi.NewRouter()
+
+	// Маршруты к хендлерам
+	router.Get("/", logger.WithLogging(handler.IndexHandler))
+	router.Post("/api/v1/avatars", logger.WithLogging(avatarHandler.PostUploadAvatarHandler))
+	// Получение
+	router.Get("/api/v1/avatars/{avatar_id}", avatarHandler.GetAvatarHandler)
+	router.Get("/api/v1/users/{user_id}/avatar", avatarHandler.GetUserAvatarHandler)
+	router.Get("/api/v1/avatars/{avatar_id}/metadata", avatarHandler.GetAvatarMetadataHandler)
+	// Удаление
+	router.Delete("/api/v1/avatars/{avatar_id}", avatarHandler.DeleteAvatarHandler)
+	// healthCheck
+	router.Get("/health", avatarHandler.HealthCheckHandler)
 	var server = &http.Server{
 		Addr:    config.CfgServer.Port,
 		Handler: router,

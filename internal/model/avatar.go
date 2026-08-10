@@ -1,26 +1,28 @@
-// internal/model/avatar.go
 package model
 
 import (
-	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"time"
 )
 
-// Thumbnails тип для работы с JSONB в PostgreSQL
-type Thumbnails map[string]string
-
-func (t Thumbnails) Value() (driver.Value, error) {
-	return json.Marshal(t)
+type Thumbnails struct {
+	Small  string `json:"small,omitempty"`
+	Medium string `json:"medium,omitempty"`
 }
 
+// Scan преобразует данные из БД (JSONB/text) в структуру Go
 func (t *Thumbnails) Scan(value interface{}) error {
-	b, ok := value.([]byte)
+	if value == nil {
+		return nil
+	}
+
+	bytes, ok := value.([]byte)
 	if !ok {
 		return errors.New("type assertion to []byte failed")
 	}
-	return json.Unmarshal(b, &t)
+
+	return json.Unmarshal(bytes, t)
 }
 
 type Avatar struct {
