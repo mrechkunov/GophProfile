@@ -9,12 +9,14 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"gophprofile/internal/config"
 	"gophprofile/internal/logger"
@@ -57,7 +59,7 @@ func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) er
 		return fmt.Errorf("failed to unmarshal JSON task: %w", err)
 	}
 
-	logger.Log.Infof("Processing resize for AvatarID: %s", task.AvatarID)
+	logger.Log.InfoContext(ctx, "Processing resize for AvatarID", "AvatarID", task.AvatarID)
 
 	object, err := p.s3.GetObject(ctx, task.BucketName, task.ObjectKey, minio.GetObjectOptions{})
 	if err != nil {
@@ -119,7 +121,7 @@ func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) er
 		return fmt.Errorf("failed to update avatar row in database: %w", err)
 	}
 
-	logger.Log.Infof("Successfully processed and saved thumbnails for AvatarID: %s", task.AvatarID)
+	logger.Log.InfoContext(ctx, "Successfully processed and saved thumbnails for AvatarID", "AvatarID", task.AvatarID)
 	return nil
 }
 
@@ -128,11 +130,15 @@ func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) er
 // ==========================================
 
 type AvatarDeleteWorker struct {
-	s3 repository.MinioClientAPI
+	s3     repository.MinioClientAPI
+	logger *slog.Logger
 }
 
-func NewAvatarDeleteWorker(s3 repository.MinioClientAPI) *AvatarDeleteWorker {
-	return &AvatarDeleteWorker{s3: s3}
+func NewAvatarDeleteWorker(s3 repository.MinioClientAPI, logger *slog.Logger) *AvatarDeleteWorker {
+	return &AvatarDeleteWorker{
+		s3:     s3,
+		logger: logger,
+	}
 }
 
 func (w *AvatarDeleteWorker) ProcessDeleteTask(ctx context.Context, payload []byte) error {
@@ -141,7 +147,7 @@ func (w *AvatarDeleteWorker) ProcessDeleteTask(ctx context.Context, payload []by
 		return fmt.Errorf("failed to unmarshal delete task: %w", err)
 	}
 
-	logger.Log.Infof("Worker starting physical cleanup for AvatarID: %s. Total files: %d", task.AvatarID, len(task.S3Keys))
+	w.logger.InfoContext(ctx, "Worker starting physical cleanup for ", "AvatarID:", task.AvatarID, "Total files:", len(task.S3Keys))
 
 	for _, key := range task.S3Keys {
 		if key == "" {
@@ -149,10 +155,10 @@ func (w *AvatarDeleteWorker) ProcessDeleteTask(ctx context.Context, payload []by
 		}
 		err := w.s3.RemoveObject(ctx, BucketName, key, minio.RemoveObjectOptions{})
 		if err != nil {
-			logger.Log.Errorf("Worker failed to physically remove object %s from MinIO: %v", key, err)
+			w.logger.ErrorContext(ctx, "Worker failed to physically remove object from MinIO:", "object key", key, "err", err)
 			continue
 		}
-		logger.Log.Infof("Physically removed object from S3: %s", key)
+		w.logger.InfoContext(ctx, "Physically removed object from S3:", "object key", key)
 	}
 
 	return nil
@@ -163,7 +169,9 @@ func (w *AvatarDeleteWorker) ProcessDeleteTask(ctx context.Context, payload []by
 // ==========================================
 
 func main() {
-	config.InitWorker()
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	config.InitWorker(ctx)
 
 	// Инициализируем общие для обоих процессов зависимости (БД на pgx/v5 и MinIO)
 	repo := repository.NewPostgresAvatarRepository(config.ConnWorker.DB)
@@ -171,7 +179,7 @@ func main() {
 
 	// Создаем экземпляры наших процессоров логики
 	resizeProcessor := NewResizeProcessor(s3Client, repo)
-	deleteWorker := NewAvatarDeleteWorker(s3Client)
+	deleteWorker := NewAvatarDeleteWorker(s3Client, logger.Log)
 
 	// Настраиваем Kafka ридеров для каждого топика
 	resizeReader := kafka.NewReader(kafka.ReaderConfig{
@@ -198,30 +206,30 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	logger.Log.Infoln("Combined Avatar Worker Daemon started successfully...")
+	logger.Log.InfoContext(ctx, "Combined Avatar Worker Daemon started successfully...")
 
 	// Рутина 1: Слушаем задачи на ресайз
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		logger.Log.Infoln("Subscribed to topic:", config.KafkaResizeTopic)
+		logger.Log.InfoContext(ctx, "Subscribed to topic:", "", config.KafkaResizeTopic)
 		for {
 			msg, err := resizeReader.FetchMessage(ctx)
 			if err != nil {
 				if ctx.Err() != nil {
 					break
 				}
-				logger.Log.Errorln("Error fetching resize message:", err)
+				logger.Log.ErrorContext(ctx, "Error fetching resize message:", "err", err)
 				continue
 			}
 
 			if err := resizeProcessor.ProcessResizeTask(ctx, msg.Value); err != nil {
-				logger.Log.Errorf("Failed to resize avatar for key %s: %v", string(msg.Key), err)
+				logger.Log.ErrorContext(ctx, "Failed to resize avatar for key:", "key", string(msg.Key), "err", err)
 				continue
 			}
 
 			if err := resizeReader.CommitMessages(ctx, msg); err != nil {
-				logger.Log.Errorln("Failed to commit resize message:", err)
+				logger.Log.ErrorContext(ctx, "Failed to commit resize message:", "err", err)
 			}
 		}
 	}()
@@ -230,31 +238,31 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		logger.Log.Infoln("Subscribed to topic:", config.KafkaDeleteTopic)
+		logger.Log.InfoContext(ctx, "Subscribed to topic:", "", config.KafkaDeleteTopic)
 		for {
 			msg, err := deleteReader.FetchMessage(ctx)
 			if err != nil {
 				if ctx.Err() != nil {
 					break
 				}
-				logger.Log.Errorln("Error fetching delete message:", err)
+				logger.Log.ErrorContext(ctx, "Error fetching delete message:", "err", err)
 				continue
 			}
 
 			if err := deleteWorker.ProcessDeleteTask(ctx, msg.Value); err != nil {
-				logger.Log.Errorf("Failed to clear S3 layout for key %s: %v", string(msg.Key), err)
+				logger.Log.ErrorContext(ctx, "Failed to clear S3 layout for key:", "key", string(msg.Key), "err", err)
 				continue
 			}
 
 			if err := deleteReader.CommitMessages(ctx, msg); err != nil {
-				logger.Log.Errorln("Failed to commit delete message:", err)
+				logger.Log.ErrorContext(ctx, "Failed to commit delete message:", "err", err)
 			}
 		}
 	}()
 
 	// Ожидаем завершения горутин при системном сигнале SIGTERM
 	<-ctx.Done()
-	logger.Log.Infoln("Stopping worker consumers gracefully...")
+	logger.Log.InfoContext(ctx, "Stopping worker consumers gracefully...")
 	wg.Wait()
-	logger.Log.Infoln("All background processes successfully stopped.")
+	logger.Log.InfoContext(ctx, "All background processes successfully stopped.")
 }

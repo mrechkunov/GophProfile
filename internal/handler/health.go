@@ -79,4 +79,7 @@ func (h *AvatarHandler) HealthCheckHandler(w http.ResponseWriter, r *http.Reques
 		Status:     globalStatus,
 		Components: components,
 	})
+	h.logger.DebugContext(r.Context(), "Health check")
+	// slog.DebugContext(r.Context(), "Health check")
+	// fmt.Fprintf(w, "OK\n")
 }

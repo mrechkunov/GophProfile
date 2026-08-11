@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"testing"
 
 	"gophprofile/internal/model"
@@ -23,7 +24,8 @@ func TestResizeProcessor_ProcessResizeTask_InvalidJSON(t *testing.T) {
 // ТЕСТЫ ОЧИСТКИ S3 (SOFT-DELETE CLEANER)
 func TestAvatarDeleteWorker_ProcessDeleteTask_Success(t *testing.T) {
 	mockMinio := new(repository.MockMinioClient)
-	w := NewAvatarDeleteWorker(mockMinio)
+	discardLogger := slog.New(slog.DiscardHandler)
+	w := NewAvatarDeleteWorker(mockMinio, discardLogger)
 
 	// Ожидаем физическое удаление файлов из S3
 	mockMinio.On("RemoveObject", mock.Anything, BucketName, "originals/123.png", mock.Anything).Return(nil)
@@ -42,7 +44,7 @@ func TestAvatarDeleteWorker_ProcessDeleteTask_Success(t *testing.T) {
 }
 
 func TestAvatarDeleteWorker_ProcessDeleteTask_InvalidJSON(t *testing.T) {
-	w := NewAvatarDeleteWorker(nil)
+	w := NewAvatarDeleteWorker(nil, nil)
 	err := w.ProcessDeleteTask(context.Background(), []byte(`{invalid`))
 	assert.Error(t, err)
 }

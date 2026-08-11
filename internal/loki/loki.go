@@ -1,68 +1,70 @@
 package loki
 
-import (
-	"context"
-	"log"
-	"log/slog"
-	"time"
+// package loki
 
-	"go.opentelemetry.io/contrib/bridges/otelslog"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
-	sdklog "go.opentelemetry.io/otel/sdk/log"
-	"go.opentelemetry.io/otel/sdk/resource"
-	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
-)
+// import (
+// 	"context"
+// 	"log"
+// 	"log/slog"
+// 	"time"
 
-func InitLoggerProvider(ctx context.Context) (*slog.Logger, func()) {
-	// Создаём gRPC Exporter для логов (порт 4317)
-	exporter, err := otlploggrpc.New(ctx)
-	if err != nil {
-		log.Fatalf("failed to create OTLP log exporter: %v", err)
-	}
+// 	"go.opentelemetry.io/contrib/bridges/otelslog"
+// 	"go.opentelemetry.io/otel"
+// 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+// 	sdklog "go.opentelemetry.io/otel/sdk/log"
+// 	"go.opentelemetry.io/otel/sdk/resource"
+// 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+// )
 
-	// Метаинформация (Resource)
-	res, err := resource.New(ctx,
-		resource.WithFromEnv(),
-		resource.WithTelemetrySDK(),
-		resource.WithAttributes(
-			semconv.ServiceNameKey.String("gophprofileservice"),
-			semconv.ServiceVersionKey.String("1.0.0"),
-		),
-	)
-	if err != nil {
-		log.Fatalf("failed to create resource: %v", err)
-	}
+// func InitLoggerProvider(ctx context.Context) (*slog.Logger, func()) {
+// 	// Создаём gRPC Exporter для логов (порт 4317)
+// 	exporter, err := otlploggrpc.New(ctx)
+// 	if err != nil {
+// 		log.Fatalf("failed to create OTLP log exporter: %v", err)
+// 	}
 
-	// Инициализируем LoggerProvider
-	loggerProvider := sdklog.NewLoggerProvider(
-		sdklog.WithResource(res),
-		sdklog.WithProcessor(sdklog.NewBatchProcessor(exporter)),
-	)
+// 	// Метаинформация (Resource)
+// 	res, err := resource.New(ctx,
+// 		resource.WithFromEnv(),
+// 		resource.WithTelemetrySDK(),
+// 		resource.WithAttributes(
+// 			semconv.ServiceNameKey.String("gophprofileservice"),
+// 			semconv.ServiceVersionKey.String("1.0.0"),
+// 		),
+// 	)
+// 	if err != nil {
+// 		log.Fatalf("failed to create resource: %v", err)
+// 	}
 
-	// Создаем slog Handler через otelslog bridge
-	handler := otelslog.NewHandler(
-		"gophprofileservice",
-		otelslog.WithLoggerProvider(loggerProvider),
-	)
+// 	// Инициализируем LoggerProvider
+// 	loggerProvider := sdklog.NewLoggerProvider(
+// 		sdklog.WithResource(res),
+// 		sdklog.WithProcessor(sdklog.NewBatchProcessor(exporter)),
+// 	)
 
-	// Создаем slog логгер с этим handler'ом
-	logger := slog.New(handler)
+// 	// Создаем slog Handler через otelslog bridge
+// 	handler := otelslog.NewHandler(
+// 		"gophprofileservice",
+// 		otelslog.WithLoggerProvider(loggerProvider),
+// 	)
 
-	// Устанавливаем как глобальный логгер
-	slog.SetDefault(logger)
+// 	// Создаем slog логгер с этим handler'ом
+// 	logger := slog.New(handler)
 
-	// Возвращаем функцию для корректного завершения (flush данных перед выходом)
-	shutdown := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := loggerProvider.Shutdown(ctx); err != nil {
-			otel.Handle(err)
-		}
-	}
+// 	// Устанавливаем как глобальный логгер
+// 	slog.SetDefault(logger)
 
-	return logger, shutdown
-}
+// 	// Возвращаем функцию для корректного завершения (flush данных перед выходом)
+// 	shutdown := func() {
+// 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+// 		defer cancel()
+// 		if err := loggerProvider.Shutdown(ctx); err != nil {
+// 			otel.Handle(err)
+// 		}
+// 	}
+
+// 	return logger, shutdown
+// }
 
 // func main() {
 // 	ctx := context.Background()

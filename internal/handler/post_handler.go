@@ -18,7 +18,7 @@ import (
 // POST /api/v1/avatars
 func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	h.logger.InfoContext(r.Context(), "POST incoming")
+	h.logger.InfoContext(r.Context(), "Procesing AvatarUpload requiest")
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -186,4 +186,5 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 		Status:    "processing",
 		CreatedAt: time.Now().UTC(),
 	})
+	h.logger.InfoContext(r.Context(), "UploadAvatar request processing completed")
 }

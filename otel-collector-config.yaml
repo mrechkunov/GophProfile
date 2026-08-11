@@ -30,3 +30,7 @@ service:
         - resource/add-job
         - batch
       exporters: [otlphttp/loki]
+    # traces:
+    #   receivers: [otlp]
+    #   processors: [batch]
+    #   exporters: [otlphttp/loki]

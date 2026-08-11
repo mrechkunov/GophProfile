@@ -14,7 +14,7 @@ import (
 )
 
 func TestHealthCheckHandler_AllUp(t *testing.T) {
-	// Инициализируем моки для ВСЕХ трех компонентов
+	// Инициализируем моки для ВСЕХ четырех компонентов
 	mockRepo := new(repository.MockAvatarRepository)
 	mockMinio := new(repository.MockMinioClient)
 	mockKafka := new(repository.MockKafkaProducer)

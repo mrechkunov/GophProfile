@@ -98,6 +98,10 @@ services:
         condition: service_healthy
       otel-collector:
         condition: service_started
+      loki:
+        condition: service_started
+      grafana:
+        condition: service_started
     restart: unless-stopped
 
   otel-collector:

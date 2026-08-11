@@ -36,12 +36,12 @@ type AvatarHandler struct {
 }
 
 // NewAvatarHandler — конструктор хэндлера
-func NewAvatarHandler(repo repository.AvatarRepository, s3 repository.MinioClientAPI, kafka repository.KafkaProducerAPI, loki *slog.Logger) *AvatarHandler {
+func NewAvatarHandler(repo repository.AvatarRepository, s3 repository.MinioClientAPI, kafka repository.KafkaProducerAPI, logger *slog.Logger) *AvatarHandler {
 	return &AvatarHandler{
 		repo:   repo,
 		s3:     s3,
 		kafka:  kafka,
-		logger: loki.With("component", "AvatarHandler"),
+		logger: logger.With("component", "AvatarHandler"),
 	}
 }
 

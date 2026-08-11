@@ -1,77 +1,69 @@
 package logger
 
 import (
-	"net/http"
+	"context"
+	"log"
+	"log/slog"
 	"time"
 
-	"go.uber.org/zap"
+	"go.opentelemetry.io/contrib/bridges/otelslog"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/sdk/resource"
+	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
-
-type (
-	// берём структуру для хранения сведений об ответе
-	responseData struct {
-		status int
-		size   int
-	}
-
-	// добавляем реализацию http.ResponseWriter
-	loggingResponseWriter struct {
-		http.ResponseWriter // встраиваем оригинальный http.ResponseWriter
-		responseData        *responseData
-	}
-)
-
-func (r *loggingResponseWriter) Write(b []byte) (int, error) {
-	// записываем ответ, используя оригинальный http.ResponseWriter
-	size, err := r.ResponseWriter.Write(b)
-	r.responseData.size += size // захватываем размер
-	return size, err
-}
-
-func (r *loggingResponseWriter) WriteHeader(statusCode int) {
-	// записываем код статуса, используя оригинальный http.ResponseWriter
-	r.ResponseWriter.WriteHeader(statusCode)
-	r.responseData.status = statusCode // захватываем код статуса
-}
-
-// WithLogging добавляет дополнительный код для регистрации сведений о запросе
-// и возвращает новый http.Handler.
-func WithLogging(h http.HandlerFunc) http.HandlerFunc {
-	logFn := func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		responseData := &responseData{
-			status: 0,
-			size:   0,
-		}
-		lw := loggingResponseWriter{
-			ResponseWriter: w, // встраиваем оригинальный http.ResponseWriter
-			responseData:   responseData,
-		}
-		h.ServeHTTP(&lw, r) // внедряем реализацию http.ResponseWriter
-
-		duration := time.Since(start)
-
-		Log.Infoln(
-			"uri", r.RequestURI,
-			"method", r.Method,
-			"status", responseData.status, // получаем перехваченный код статуса ответа
-			"duration", duration,
-			"size", responseData.size, // получаем перехваченный размер ответа
-		)
-	}
-	return http.HandlerFunc(logFn)
-}
 
 // глобальный логгер
-var Log *zap.SugaredLogger
+var Log *slog.Logger
+var OtelShutdown func()
 
-func init() { // функция запускается автоматически при ипорте пакета
-	// создаём предустановленный регистратор zap
-	zapLogger, err := zap.NewDevelopment()
+func InitLoggerProvider(ctx context.Context) (*slog.Logger, func()) {
+	// Создаём gRPC Exporter для логов (порт 4317)
+	exporter, err := otlploggrpc.New(ctx)
 	if err != nil {
-		// вызываем панику, если ошибка
-		panic(err)
+		log.Fatalf("failed to create OTLP log exporter: %v", err)
 	}
-	// делаем регистратор SugaredLogger
-	Log = zapLogger.Sugar()
+
+	// Метаинформация (Resource)
+	res, err := resource.New(ctx,
+		resource.WithFromEnv(),
+		resource.WithTelemetrySDK(),
+		resource.WithAttributes(
+			semconv.ServiceNameKey.String("gophprofileservice"),
+			semconv.ServiceVersionKey.String("1.0.0"),
+		),
+	)
+	if err != nil {
+		log.Fatalf("failed to create resource: %v", err)
+	}
+
+	// Инициализируем LoggerProvider
+	loggerProvider := sdklog.NewLoggerProvider(
+		sdklog.WithResource(res),
+		sdklog.WithProcessor(sdklog.NewBatchProcessor(exporter)),
+	)
+
+	// Создаем slog Handler через otelslog bridge
+	handler := otelslog.NewHandler(
+		"gophprofileservice",
+		otelslog.WithLoggerProvider(loggerProvider),
+	)
+
+	// Создаем slog логгер с этим handler'ом
+	logger := slog.New(handler)
+
+	// Устанавливаем как глобальный логгер
+	slog.SetDefault(logger)
+
+	// Возвращаем функцию для корректного завершения (flush данных перед выходом)
+	shutdown := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := loggerProvider.Shutdown(ctx); err != nil {
+			otel.Handle(err)
+		}
+	}
+
+	return logger, shutdown
 }
