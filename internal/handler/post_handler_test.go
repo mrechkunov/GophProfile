@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -48,7 +49,8 @@ func createValidMultipartBody(t *testing.T, fieldName, fileName string, size int
 
 // Метод запроса не POST
 func TestPostUploadAvatarHandler_MethodNotAllowed(t *testing.T) {
-	h := handler.NewAvatarHandler(nil, nil, nil)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/avatars", nil)
 	rr := httptest.NewRecorder()
 
@@ -59,7 +61,8 @@ func TestPostUploadAvatarHandler_MethodNotAllowed(t *testing.T) {
 
 // Отсутствует заголовок X-User-ID
 func TestPostUploadAvatarHandler_MissingUserID(t *testing.T) {
-	h := handler.NewAvatarHandler(nil, nil, nil)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/avatars", nil)
 	rr := httptest.NewRecorder()
 
@@ -73,7 +76,8 @@ func TestPostUploadAvatarHandler_MissingUserID(t *testing.T) {
 
 // Файл слишком большой на этапе парсинга Multipart формы (> 10MB)
 func TestPostUploadAvatarHandler_MultipartBodyTooLarge(t *testing.T) {
-	h := handler.NewAvatarHandler(nil, nil, nil)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
 
 	// Передаем размер больше константы MaxFileSize (10 * 1024 * 1024)
 	body, contentType := createValidMultipartBody(t, "image", "avatar.png", handler.MaxFileSize+100)
@@ -93,7 +97,8 @@ func TestPostUploadAvatarHandler_MultipartBodyTooLarge(t *testing.T) {
 
 // Отсутствует нужное поле файла ("image") в форме
 func TestPostUploadAvatarHandler_MissingFileField(t *testing.T) {
-	h := handler.NewAvatarHandler(nil, nil, nil)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
 	// Создаем форму с неверным именем поля "wrong_field"
 	body, contentType := createValidMultipartBody(t, "wrong_field", "avatar.png", 100)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/avatars", body)
@@ -111,7 +116,8 @@ func TestPostUploadAvatarHandler_MissingFileField(t *testing.T) {
 
 // Невалидный формат файла (проверка Magic Bytes на примере plain text)
 func TestPostUploadAvatarHandler_InvalidMagicBytes(t *testing.T) {
-	h := handler.NewAvatarHandler(nil, nil, nil)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
@@ -134,7 +140,8 @@ func TestPostUploadAvatarHandler_InvalidMagicBytes(t *testing.T) {
 
 // Конфликт: Валидные Magic Bytes, но невалидное расширение файла (.exe)
 func TestPostUploadAvatarHandler_InvalidExtension(t *testing.T) {
-	h := handler.NewAvatarHandler(nil, nil, nil)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
 	body, contentType := createValidMultipartBody(t, "image", "malicious.exe", 100)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/avatars", body)
@@ -153,7 +160,8 @@ func TestPostUploadAvatarHandler_InvalidExtension(t *testing.T) {
 // Сбой загрузки в MinIO (Должен вернуть 500 ошибку, откат ресурсов не требуется)
 func TestPostUploadAvatarHandler_MinioUploadError(t *testing.T) {
 	mockMinio := new(repository.MockMinioClient)
-	h := handler.NewAvatarHandler(nil, mockMinio, nil)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(nil, mockMinio, nil, discardLogger)
 
 	mockMinio.On("PutObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(minio.UploadInfo{}, errors.New("s3 connection down"))
@@ -177,7 +185,8 @@ func TestPostUploadAvatarHandler_MinioUploadError(t *testing.T) {
 func TestPostUploadAvatarHandler_DBInsertionError_RollbackS3(t *testing.T) {
 	mockRepo := new(repository.MockAvatarRepository)
 	mockMinio := new(repository.MockMinioClient)
-	h := handler.NewAvatarHandler(mockRepo, mockMinio, nil)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(mockRepo, mockMinio, nil, discardLogger)
 
 	// Успешная загрузка оригинального файла в S3
 	mockMinio.On("PutObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -214,7 +223,8 @@ func TestPostUploadAvatarHandler_KafkaError_FullRollback(t *testing.T) {
 	mockRepo := new(repository.MockAvatarRepository)
 	mockMinio := new(repository.MockMinioClient)
 	mockKafka := new(repository.MockKafkaProducer)
-	h := handler.NewAvatarHandler(mockRepo, mockMinio, mockKafka)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(mockRepo, mockMinio, mockKafka, discardLogger)
 
 	// MinIO принимает файл
 	mockMinio.On("PutObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
@@ -263,7 +273,8 @@ func TestPostUploadAvatarHandler_Success(t *testing.T) {
 	mockRepo := new(repository.MockAvatarRepository)
 	mockMinio := new(repository.MockMinioClient)
 	mockKafka := new(repository.MockKafkaProducer)
-	h := handler.NewAvatarHandler(mockRepo, mockMinio, mockKafka)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(mockRepo, mockMinio, mockKafka, discardLogger)
 	var capturedAvatar *model.Avatar
 	mockMinio.On("PutObject", mock.Anything, handler.BucketName, mock.Anything,
 		mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)

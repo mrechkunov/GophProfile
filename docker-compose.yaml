@@ -85,6 +85,10 @@ services:
       - MINIO_SSL=false
       - KAFKA_BROKERS=kafka:9093
       - MIGRATIONS_PATH=file://migrations
+      - OTEL_SERVICE_NAME=gophprofileservice
+      - OTEL_RESOURCE_ATTRIBUTES=deployment.environment=development
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,8 +96,51 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
-        
+      otel-collector:
+        condition: service_started
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector:0.143.0
+    container_name: otel-collector
+    ports:
+      - "4317:4317"
+      - "13133:13133"
+    command:
+      - "--config=/etc/otel-collector-config.yml"
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yml:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.6.3
+    container_name: loki
+    command:
+      - "-config.file=/etc/loki/local-config.yml"
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yml:ro
+      - loki-data:/loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.3.1
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - loki
+    restart: unless-stopped
+
 volumes:
   kafka_data:
   pg_data:
   minio_data:
+  loki-data:
+  grafana-data:

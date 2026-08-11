@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"gophprofile/internal/handler"
 	"gophprofile/internal/repository"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,10 +17,11 @@ func TestHealthCheckHandler_AllUp(t *testing.T) {
 	// Инициализируем моки для ВСЕХ трех компонентов
 	mockRepo := new(repository.MockAvatarRepository)
 	mockMinio := new(repository.MockMinioClient)
-	mockKafka := new(repository.MockKafkaProducer) // Добавили мок кафки
+	mockKafka := new(repository.MockKafkaProducer)
+	discardLogger := slog.New(slog.DiscardHandler)
 
 	// Передаем все три мока в хэндлер
-	h := handler.NewAvatarHandler(mockRepo, mockMinio, mockKafka)
+	h := handler.NewAvatarHandler(mockRepo, mockMinio, mockKafka, discardLogger)
 
 	// Настраиваем успешное (зелёное) поведение для каждого мока
 	mockRepo.On("Ping", mock.Anything).Return(nil)

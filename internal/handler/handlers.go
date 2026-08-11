@@ -2,6 +2,7 @@ package handler
 
 import (
 	"gophprofile/internal/repository"
+	"log/slog"
 	"time"
 )
 
@@ -28,17 +29,19 @@ type SizeErrorResponse struct {
 
 // AvatarHandler объединяет зависимости для работы с аватарами
 type AvatarHandler struct {
-	repo  repository.AvatarRepository
-	s3    repository.MinioClientAPI
-	kafka repository.KafkaProducerAPI
+	repo   repository.AvatarRepository
+	s3     repository.MinioClientAPI
+	kafka  repository.KafkaProducerAPI
+	logger *slog.Logger
 }
 
 // NewAvatarHandler — конструктор хэндлера
-func NewAvatarHandler(repo repository.AvatarRepository, s3 repository.MinioClientAPI, kafka repository.KafkaProducerAPI) *AvatarHandler {
+func NewAvatarHandler(repo repository.AvatarRepository, s3 repository.MinioClientAPI, kafka repository.KafkaProducerAPI, loki *slog.Logger) *AvatarHandler {
 	return &AvatarHandler{
-		repo:  repo,
-		s3:    s3,
-		kafka: kafka,
+		repo:   repo,
+		s3:     s3,
+		kafka:  kafka,
+		logger: loki.With("component", "AppHandler"),
 	}
 }
 

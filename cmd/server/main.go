@@ -7,6 +7,7 @@ import (
 	"gophprofile/internal/config"
 	"gophprofile/internal/handler"
 	"gophprofile/internal/logger"
+	"gophprofile/internal/loki"
 	"gophprofile/internal/repository"
 	"net/http"
 	"os/signal"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 func main() {
@@ -21,6 +23,16 @@ func main() {
 	// Создаем контекст для получения системных сигналов
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
+	// инициализируем Loki
+	loki, otelShutdown := loki.InitLoggerProvider(context.Background())
+	defer otelShutdown()
+	var router = chi.NewRouter()
+	// обертка хендлера для логирования
+	wrappedHandler := otelhttp.NewHandler(
+		router,
+		"gophprofileservice",
+		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
+	)
 
 	repo := repository.NewPostgresAvatarRepository(config.ConnServer.DB)
 	kafkaAdapter := &repository.KafkaProducer{
@@ -31,13 +43,12 @@ func main() {
 		repo,
 		config.ConnServer.MinioClient,
 		kafkaAdapter,
+		loki,
 	)
 
-	var router = chi.NewRouter()
-
 	// Маршруты к хендлерам
-	router.Get("/", logger.WithLogging(handler.IndexHandler))
-	router.Post("/api/v1/avatars", logger.WithLogging(avatarHandler.PostUploadAvatarHandler))
+	router.Get("/", handler.IndexHandler)
+	router.Post("/api/v1/avatars", avatarHandler.PostUploadAvatarHandler)
 	// Получение
 	router.Get("/api/v1/avatars/{avatar_id}", avatarHandler.GetAvatarHandler)
 	router.Get("/api/v1/users/{user_id}/avatar", avatarHandler.GetUserAvatarHandler)
@@ -48,10 +59,10 @@ func main() {
 	router.Get("/health", avatarHandler.HealthCheckHandler)
 	var server = &http.Server{
 		Addr:    config.CfgServer.Port,
-		Handler: router,
+		Handler: wrappedHandler,
 	}
 
-	logger.Log.Infoln("server starting:", config.CfgServer.Port, "http")
+	loki.Info("server starting:", config.CfgServer.Port, "http")
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Log.Fatalln(err.Error())

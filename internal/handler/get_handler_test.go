@@ -7,6 +7,7 @@ import (
 	"gophprofile/internal/handler"
 	"gophprofile/internal/model"
 	"gophprofile/internal/repository"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -20,7 +21,8 @@ import (
 // Тест сценария 404: Аватарка не найдена в Базе Данных
 func TestGetAvatarHandler_Binary_NotFound(t *testing.T) {
 	mockRepo := new(repository.MockAvatarRepository)
-	h := handler.NewAvatarHandler(mockRepo, nil, nil)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(mockRepo, nil, nil, discardLogger)
 
 	// Настраиваем мок репозитория на возврат ошибки отсутствия строк
 	mockRepo.On("GetByID", mock.Anything, "missing-avatar-id").
@@ -50,7 +52,8 @@ func TestGetAvatarHandler_Binary_NotFound(t *testing.T) {
 
 // Тест сценария 400: Передан неверный размер
 func TestGetAvatarHandler_Binary_InvalidSize(t *testing.T) {
-	h := handler.NewAvatarHandler(nil, nil, nil)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/avatars/some-id?size=999x999", nil)
 	rctx := chi.NewRouteContext()
@@ -65,7 +68,8 @@ func TestGetAvatarHandler_Binary_InvalidSize(t *testing.T) {
 
 func TestGetAvatarMetadataHandler_Success(t *testing.T) {
 	mockRepo := new(repository.MockAvatarRepository)
-	h := handler.NewAvatarHandler(mockRepo, nil, nil)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(mockRepo, nil, nil, discardLogger)
 
 	now := time.Now().UTC()
 	expectedAvatar := &model.Avatar{
@@ -121,7 +125,8 @@ func TestGetAvatarMetadataHandler_Success(t *testing.T) {
 
 func TestGetUserAvatarHandler_Binary_NotFound(t *testing.T) {
 	mockRepo := new(repository.MockAvatarRepository)
-	h := handler.NewAvatarHandler(mockRepo, nil, nil)
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(mockRepo, nil, nil, discardLogger)
 
 	// Настраиваем мок на возврат ошибки отсутствия записей для конкретного user_id
 	mockRepo.On("GetByUserID", mock.Anything, "user-without-avatar").
