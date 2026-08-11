@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"gophprofile/internal/config"
-	"gophprofile/internal/logger"
 	"gophprofile/internal/model"
 	"net/http"
 	"path/filepath"
@@ -19,7 +18,7 @@ import (
 // POST /api/v1/avatars
 func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-
+	h.logger.InfoContext(r.Context(), "POST incoming")
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -122,7 +121,7 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to save file to storage"})
-		logger.Log.Errorln("error while putting object into minio", err)
+		h.logger.ErrorContext(r.Context(), "error while putting object into minio")
 		return
 	}
 	s3Uploaded = true
@@ -144,7 +143,7 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to save avatar metadata"})
-		logger.Log.Warnln("error while write new avatar in db", err)
+		h.logger.WarnContext(r.Context(), "error while write new avatar in db")
 		return
 	}
 	dbCreated = true
@@ -172,7 +171,7 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "failed to dispatch async task"})
-		logger.Log.Errorln("error while send message in kafka (POST /api/v1/avatars)", err)
+		h.logger.ErrorContext(r.Context(), "error while send message in kafka (POST /api/v1/avatars)")
 		return
 	}
 

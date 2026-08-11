@@ -4,6 +4,6 @@ import (
 	"net/http"
 )
 
-func IndexHandler(w http.ResponseWriter, r *http.Request) {
+func (h *AvatarHandler) IndexHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, "./web/static/index.html")
 }

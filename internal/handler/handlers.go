@@ -41,7 +41,7 @@ func NewAvatarHandler(repo repository.AvatarRepository, s3 repository.MinioClien
 		repo:   repo,
 		s3:     s3,
 		kafka:  kafka,
-		logger: loki.With("component", "AppHandler"),
+		logger: loki.With("component", "AvatarHandler"),
 	}
 }
 

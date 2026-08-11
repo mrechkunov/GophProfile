@@ -2,6 +2,7 @@ package handler_test
 
 import (
 	"gophprofile/internal/handler"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +11,9 @@ import (
 )
 
 func TestIndexHandler_Success(t *testing.T) {
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
+
 	// Создаем временную директорию и тестовый HTML-файл
 	tmpDir := "./web/static"
 	err := os.MkdirAll(tmpDir, 0755)
@@ -36,7 +40,7 @@ func TestIndexHandler_Success(t *testing.T) {
 	rr := httptest.NewRecorder()
 
 	// Вызываем тестируемый обработчик напрямую
-	handler := http.HandlerFunc(handler.IndexHandler)
+	handler := http.HandlerFunc(h.IndexHandler)
 	handler.ServeHTTP(rr, req)
 
 	// Проверяем HTTP-статус ответа (должен быть 200 OK)
@@ -56,6 +60,8 @@ func TestIndexHandler_Success(t *testing.T) {
 }
 
 func TestIndexHandler_FileNotFound(t *testing.T) {
+	discardLogger := slog.New(slog.DiscardHandler)
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
 	// Убедимся, что файла точно нет (удаляем временную папку, если она осталась)
 	os.RemoveAll("./web")
 
@@ -65,7 +71,7 @@ func TestIndexHandler_FileNotFound(t *testing.T) {
 	}
 
 	rr := httptest.NewRecorder()
-	handler := http.HandlerFunc(handler.IndexHandler)
+	handler := http.HandlerFunc(h.IndexHandler)
 	handler.ServeHTTP(rr, req)
 
 	// Если файла нет, http.ServeFile должен вернуть статус 404 Not Found

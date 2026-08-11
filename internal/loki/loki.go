@@ -2,14 +2,11 @@ package loki
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"go.opentelemetry.io/contrib/bridges/otelslog"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
@@ -67,61 +64,61 @@ func InitLoggerProvider(ctx context.Context) (*slog.Logger, func()) {
 	return logger, shutdown
 }
 
-func main() {
-	ctx := context.Background()
+// func main() {
+// 	ctx := context.Background()
 
-	// Инициализация логирования с slog
-	loki, otelShutdown := InitLoggerProvider(ctx)
-	defer otelShutdown()
+// 	// Инициализация логирования с slog
+// 	loki, otelShutdown := InitLoggerProvider(ctx)
+// 	defer otelShutdown()
 
-	mux := http.NewServeMux()
-	handler := NewAppHandler(loki)
+// 	mux := http.NewServeMux()
+// 	handler := NewAppHandler(loki)
 
-	// Регистрируем handlers
-	mux.Handle("GET /", http.HandlerFunc(handler.Index))
-	mux.Handle("GET /health", http.HandlerFunc(handleHealth))
+// 	// Регистрируем handlers
+// 	mux.Handle("GET /", http.HandlerFunc(handler.Index))
+// 	mux.Handle("GET /health", http.HandlerFunc(handleHealth))
 
-	// Используем otelhttp middleware для автоматического логирования HTTP запросов
-	// otelhttp автоматически логирует:
-	// - HTTP метод, путь, статус код
-	// - Длительность запроса
-	// - User-Agent, Remote Addr и другие атрибуты
-	wrappedHandler := otelhttp.NewHandler(
-		mux,
-		"gophprofileservice",
-		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
-	)
+// Используем otelhttp middleware для автоматического логирования HTTP запросов
+// otelhttp автоматически логирует:
+// - HTTP метод, путь, статус код
+// - Длительность запроса
+// - User-Agent, Remote Addr и другие атрибуты
+// 	wrappedHandler := otelhttp.NewHandler(
+// 		mux,
+// 		"gophprofileservice",
+// 		otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
+// 	)
 
-	loki.Info("Server starting", "port", 8080)
-	log.Fatal(http.ListenAndServe(":8080", wrappedHandler))
-}
+// 	loki.Info("Server starting", "port", 8080)
+// 	log.Fatal(http.ListenAndServe(":8080", wrappedHandler))
+// }
 
-type AppHandler struct {
-	logger *slog.Logger
-}
+// type AppHandler struct {
+// 	logger *slog.Logger
+// }
 
-func NewAppHandler(logger *slog.Logger) *AppHandler {
-	return &AppHandler{
-		logger: logger.With("component", "AppHandler"),
-	}
-}
+// func NewAppHandler(logger *slog.Logger) *AppHandler {
+// 	return &AppHandler{
+// 		logger: logger.With("component", "AppHandler"),
+// 	}
+// }
 
-func (h *AppHandler) Index(w http.ResponseWriter, r *http.Request) {
-	// Логируем начало обработки
-	h.logger.InfoContext(r.Context(), "Processing index request")
+// func (h *AppHandler) Index(w http.ResponseWriter, r *http.Request) {
+// 	// Логируем начало обработки
+// 	h.logger.InfoContext(r.Context(), "Processing index request")
 
-	// Логируем вложенную операцию
-	h.logger.DebugContext(r.Context(), "Simulating workload",
-		"custom.user_id", "12345",
-		"operation", "simulate_workload",
-	)
+// 	// Логируем вложенную операцию
+// 	h.logger.DebugContext(r.Context(), "Simulating workload",
+// 		"custom.user_id", "12345",
+// 		"operation", "simulate_workload",
+// 	)
 
-	h.logger.InfoContext(r.Context(), "Index request processing completed")
+// 	h.logger.InfoContext(r.Context(), "Index request processing completed")
 
-	fmt.Fprintf(w, "Hello, World!\n")
-}
+// 	fmt.Fprintf(w, "Hello, World!\n")
+// }
 
-func handleHealth(w http.ResponseWriter, r *http.Request) {
-	slog.DebugContext(r.Context(), "Health check")
-	fmt.Fprintf(w, "OK\n")
-}
+// func handleHealth(w http.ResponseWriter, r *http.Request) {
+// 	slog.DebugContext(r.Context(), "Health check")
+// 	fmt.Fprintf(w, "OK\n")
+// }

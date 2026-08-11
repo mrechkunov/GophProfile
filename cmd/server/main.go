@@ -20,14 +20,18 @@ import (
 
 func main() {
 	config.InitServer()
+
 	// Создаем контекст для получения системных сигналов
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
-	// инициализируем Loki
-	loki, otelShutdown := loki.InitLoggerProvider(context.Background())
+
+	// Инициализируем Loki, передавая ctx для контроля завершения
+	loki, otelShutdown := loki.InitLoggerProvider(ctx)
 	defer otelShutdown()
+
 	var router = chi.NewRouter()
-	// обертка хендлера для логирования
+
+	// Обертка роутера для логирования OpenTelemetry
 	wrappedHandler := otelhttp.NewHandler(
 		router,
 		"gophprofileservice",
@@ -38,6 +42,7 @@ func main() {
 	kafkaAdapter := &repository.KafkaProducer{
 		Writer: config.ConnServer.KafkaProducer,
 	}
+
 	// Создаем хэндлер и передаем зависимости
 	avatarHandler := handler.NewAvatarHandler(
 		repo,
@@ -47,41 +52,46 @@ func main() {
 	)
 
 	// Маршруты к хендлерам
-	router.Get("/", handler.IndexHandler)
+	router.Get("/", avatarHandler.IndexHandler)
 	router.Post("/api/v1/avatars", avatarHandler.PostUploadAvatarHandler)
-	// Получение
 	router.Get("/api/v1/avatars/{avatar_id}", avatarHandler.GetAvatarHandler)
 	router.Get("/api/v1/users/{user_id}/avatar", avatarHandler.GetUserAvatarHandler)
 	router.Get("/api/v1/avatars/{avatar_id}/metadata", avatarHandler.GetAvatarMetadataHandler)
-	// Удаление
 	router.Delete("/api/v1/avatars/{avatar_id}", avatarHandler.DeleteAvatarHandler)
-	// healthCheck
 	router.Get("/health", avatarHandler.HealthCheckHandler)
+
 	var server = &http.Server{
 		Addr:    config.CfgServer.Port,
 		Handler: wrappedHandler,
 	}
 
-	loki.Info("server starting:", config.CfgServer.Port, "http")
+	loki.InfoContext(ctx, "server starting", "port", config.CfgServer.Port)
+
 	go func() {
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Log.Fatalln(err.Error())
 		}
 	}()
-	<-ctx.Done()
-	logger.Log.Infoln("Получен сигнал завершения. Начинаем graceful shutdown...")
-	// Создаем контекст с таймаутом для завершения активных запросов
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+
+	<-ctx.Done() // Ждем сигнал ОС
+
+	loki.Info("Получен сигнал завершения. Начинаем graceful shutdown...")
+
+	// используем переменную shutdownCtx
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+
 	// Пытаемся плавно остановить сервер
-	if err := server.Shutdown(ctx); err != nil {
-		logger.Log.Infoln("Сервер завершился с ошибкой:", err)
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		loki.Error("Сервер завершился с ошибкой:", "error", err)
 	} else {
-		logger.Log.Infoln("Сервер остановлен корректно.")
+		loki.Info("Сервер остановлен корректно.")
 	}
 
+	// Закрываем ресурсы
 	config.ConnServer.DB.Close()
 	config.ConnServer.KafkaProducer.Close()
+
 	err := logger.Log.Sync()
 	if err != nil && !errors.Is(err, syscall.EBADF) && !errors.Is(err, syscall.ENOTTY) {
 		fmt.Println("error while zapLogger Sync in init function", err)
