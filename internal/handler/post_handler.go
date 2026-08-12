@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"gophprofile/internal/config"
 	"gophprofile/internal/model"
+	"image"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -19,10 +21,6 @@ import (
 func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	h.logger.InfoContext(r.Context(), "Procesing AvatarUpload requiest")
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
 
 	userID := r.Header.Get("X-User-ID")
 	if userID == "" {
@@ -95,6 +93,16 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	imgConfig, _, err := image.DecodeConfig(file)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid image data", Details: "Failed to parse dimensions"})
+		return
+	}
+	if seeker, ok := file.(io.ReadSeeker); ok {
+		seeker.Seek(0, io.SeekStart)
+	}
+
 	avatarID := uuid.New().String()
 	objectKey := fmt.Sprintf("originals/%s%s", avatarID, ext)
 
@@ -137,6 +145,8 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 		S3Key:            objectKey,
 		UploadStatus:     "uploading",
 		ProcessingStatus: "processing",
+		Width:            imgConfig.Width,
+		Height:           imgConfig.Height,
 	}
 
 	err = h.repo.Create(r.Context(), &avatar)

@@ -4,7 +4,7 @@ import (
 	"context"
 	"gophprofile/internal/handler"
 	"gophprofile/internal/model"
-	"gophprofile/internal/repository"
+	"gophprofile/internal/repository/mocks"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,8 +16,8 @@ import (
 )
 
 func TestDeleteAvatarHandler_Async_Success(t *testing.T) {
-	mockRepo := new(repository.MockAvatarRepository)
-	mockKafka := new(repository.MockKafkaProducer)
+	mockRepo := new(mocks.MockAvatarRepository)
+	mockKafka := new(mocks.MockKafkaProducer)
 	discardLogger := slog.New(slog.DiscardHandler)
 	// MinIO здесь передаем как nil
 	h := handler.NewAvatarHandler(mockRepo, nil, mockKafka, discardLogger)

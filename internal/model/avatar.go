@@ -33,6 +33,8 @@ type Avatar struct {
 	SizeBytes         int64      `db:"size_bytes"`
 	S3Key             string     `db:"s3_key"`
 	Thumbnail_S3_Keys Thumbnails `db:"thumbnail_s3_keys"`
+	Width             int        `db:"width"`
+	Height            int        `db:"height"`
 	UploadStatus      string     `db:"upload_status"`
 	ProcessingStatus  string     `db:"processing_status"`
 	CreatedAt         time.Time  `db:"created_at"`

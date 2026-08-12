@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -73,7 +72,7 @@ func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) er
 		return fmt.Errorf("failed to read object data: %w", err)
 	}
 
-	srcImg, imgType, err := image.Decode(strings.NewReader(string(imgData)))
+	srcImg, imgType, err := image.Decode(bytes.NewReader(imgData))
 	if err != nil {
 		return fmt.Errorf("failed to decode image format: %w", err)
 	}

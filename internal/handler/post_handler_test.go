@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"log/slog"
 	"mime/multipart"
 	"net/http"
@@ -14,7 +16,7 @@ import (
 
 	"gophprofile/internal/handler"
 	"gophprofile/internal/model"
-	"gophprofile/internal/repository"
+	"gophprofile/internal/repository/mocks"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
@@ -56,7 +58,7 @@ func TestPostUploadAvatarHandler_MethodNotAllowed(t *testing.T) {
 
 	h.PostUploadAvatarHandler(rr, req)
 
-	assert.Equal(t, http.StatusMethodNotAllowed, rr.Code)
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 // Отсутствует заголовок X-User-ID
@@ -159,32 +161,54 @@ func TestPostUploadAvatarHandler_InvalidExtension(t *testing.T) {
 
 // Сбой загрузки в MinIO (Должен вернуть 500 ошибку, откат ресурсов не требуется)
 func TestPostUploadAvatarHandler_MinioUploadError(t *testing.T) {
-	mockMinio := new(repository.MockMinioClient)
+	mockMinio := new(mocks.MockMinioClient)
 	discardLogger := slog.New(slog.DiscardHandler)
 	h := handler.NewAvatarHandler(nil, mockMinio, nil, discardLogger)
 
+	// Имитируем сбой сети или недоступность MinIO при попытке загрузки
 	mockMinio.On("PutObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(minio.UploadInfo{}, errors.New("s3 connection down"))
 
-	body, contentType := createValidMultipartBody(t, "image", "avatar.png", 100)
+	// Генерируем реальное PNG изображение 1x1 пиксель в памяти,
+	// чтобы хендлер успешно прошел image.DecodeConfig и дошел до логики PutObject!
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	var imgBuffer bytes.Buffer
+	err := png.Encode(&imgBuffer, img)
+	assert.NoError(t, err)
+
+	// Собираем правильный multipart/form-data body вручную с полем "image"
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("image", "avatar.png")
+	assert.NoError(t, err)
+	_, err = part.Write(imgBuffer.Bytes())
+	assert.NoError(t, err)
+	writer.Close()
+
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/avatars", body)
-	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("X-User-ID", "user-1")
 	rr := httptest.NewRecorder()
 
 	h.PostUploadAvatarHandler(rr, req)
 
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+
 	var res handler.ErrorResponse
-	json.Unmarshal(rr.Body.Bytes(), &res)
+	err = json.Unmarshal(rr.Body.Bytes(), &res)
+	assert.NoError(t, err)
+
+	// Проверяем текст ошибки, возвращаемый клиенту
 	assert.Equal(t, "Failed to save file to storage", res.Error)
+
+	// Убеждаемся, что метод PutObject действительно вызывался
 	mockMinio.AssertExpectations(t)
 }
 
 // Сбой сохранения в БД (ROLLBACK: файл должен удалиться из MinIO)
 func TestPostUploadAvatarHandler_DBInsertionError_RollbackS3(t *testing.T) {
-	mockRepo := new(repository.MockAvatarRepository)
-	mockMinio := new(repository.MockMinioClient)
+	mockRepo := new(mocks.MockAvatarRepository)
+	mockMinio := new(mocks.MockMinioClient)
 	discardLogger := slog.New(slog.DiscardHandler)
 	h := handler.NewAvatarHandler(mockRepo, mockMinio, nil, discardLogger)
 
@@ -200,29 +224,45 @@ func TestPostUploadAvatarHandler_DBInsertionError_RollbackS3(t *testing.T) {
 	mockMinio.On("RemoveObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything).
 		Return(nil)
 
-	body, contentType := createValidMultipartBody(t, "image", "avatar.png", 100)
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	var imgBuffer bytes.Buffer
+	err := png.Encode(&imgBuffer, img)
+	assert.NoError(t, err)
+
+	// Собираем правильный multipart-body вручную с полем "image"
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("image", "avatar.png")
+	assert.NoError(t, err)
+	_, err = part.Write(imgBuffer.Bytes())
+	assert.NoError(t, err)
+	writer.Close()
+
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/avatars", body)
-	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("X-User-ID", "user-123")
 	rr := httptest.NewRecorder()
 
+	// Вызов тестируемого хендлера
 	h.PostUploadAvatarHandler(rr, req)
 
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
 
 	var res handler.ErrorResponse
-	json.Unmarshal(rr.Body.Bytes(), &res)
+	err = json.Unmarshal(rr.Body.Bytes(), &res)
+	assert.NoError(t, err)
 	assert.Equal(t, "Failed to save avatar metadata", res.Error)
 
+	// Проверяем, что триггер RemoveObject сработал в defer
 	mockMinio.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
 }
 
 // Сбой отправки задачи в Kafka (FULL ROLLBACK: удаление из MinIO + удаление строки из БД)
 func TestPostUploadAvatarHandler_KafkaError_FullRollback(t *testing.T) {
-	mockRepo := new(repository.MockAvatarRepository)
-	mockMinio := new(repository.MockMinioClient)
-	mockKafka := new(repository.MockKafkaProducer)
+	mockRepo := new(mocks.MockAvatarRepository)
+	mockMinio := new(mocks.MockMinioClient)
+	mockKafka := new(mocks.MockKafkaProducer)
 	discardLogger := slog.New(slog.DiscardHandler)
 	h := handler.NewAvatarHandler(mockRepo, mockMinio, mockKafka, discardLogger)
 
@@ -243,26 +283,43 @@ func TestPostUploadAvatarHandler_KafkaError_FullRollback(t *testing.T) {
 	mockMinio.On("RemoveObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything).
 		Return(nil)
 
-	// Делаем мягкое удаление созданной записи в БД.
-	// Возвращаем пустой объект аватара и nil в качестве ошибки, чтобы defer выполнился без сбоев
 	mockRepo.On("SoftDelete", mock.Anything, mock.Anything).
 		Return(&model.Avatar{}, nil)
 
-	body, contentType := createValidMultipartBody(t, "image", "avatar.png", 100)
+	// Генерируем реальное PNG изображение 1x1 пиксель в памяти,
+	// чтобы хендлер успешно прошел image.DecodeConfig и дошел до логики Kafka!
+	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	var imgBuffer bytes.Buffer
+	err := png.Encode(&imgBuffer, img)
+	assert.NoError(t, err)
+
+	// Собираем правильный multipart/form-data body вручную с полем "image"
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("image", "avatar.png")
+	assert.NoError(t, err)
+	_, err = part.Write(imgBuffer.Bytes())
+	assert.NoError(t, err)
+	writer.Close()
+
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/avatars", body)
-	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("X-User-ID", "user-999")
 	rr := httptest.NewRecorder()
 
+	// Запуск хендлера
 	h.PostUploadAvatarHandler(rr, req)
 
+	// Проверяем HTTP статус внутренней ошибки сервера
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
 
+	// Проверяем тело JSON-ответа
 	var res handler.ErrorResponse
-	json.Unmarshal(rr.Body.Bytes(), &res)
-	assert.NoError(t, json.Unmarshal(rr.Body.Bytes(), &res))
+	err = json.Unmarshal(rr.Body.Bytes(), &res)
+	assert.NoError(t, err)
 	assert.Equal(t, "failed to dispatch async task", res.Error)
 
+	// Проверяем, что все ожидания по мокам (включая RemoveObject и SoftDelete) выполнились
 	mockMinio.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
 	mockKafka.AssertExpectations(t)
@@ -270,32 +327,52 @@ func TestPostUploadAvatarHandler_KafkaError_FullRollback(t *testing.T) {
 
 // Успешный сценарий (все системы работают штатно)
 func TestPostUploadAvatarHandler_Success(t *testing.T) {
-	mockRepo := new(repository.MockAvatarRepository)
-	mockMinio := new(repository.MockMinioClient)
-	mockKafka := new(repository.MockKafkaProducer)
+	mockRepo := new(mocks.MockAvatarRepository)
+	mockMinio := new(mocks.MockMinioClient)
+	mockKafka := new(mocks.MockKafkaProducer)
 	discardLogger := slog.New(slog.DiscardHandler)
 	h := handler.NewAvatarHandler(mockRepo, mockMinio, mockKafka, discardLogger)
+
 	var capturedAvatar *model.Avatar
+
 	mockMinio.On("PutObject", mock.Anything, handler.BucketName, mock.Anything,
 		mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
+
 	// Перехватываем структуру данных для валидации полей БД
 	mockRepo.On("Create", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		capturedAvatar = args.Get(1).(*model.Avatar)
 	}).Return(nil)
 
 	mockKafka.On("WriteMessages", mock.Anything, mock.Anything).Return(nil)
-	body, contentType := createValidMultipartBody(t, "image", "profile_pic.png", 500)
+
+	// Генерируем реальное изображение 100x100 в памяти, чтобы пройти image.DecodeConfig
+	img := image.NewRGBA(image.Rect(0, 0, 100, 100))
+	var imgBuffer bytes.Buffer
+	err := png.Encode(&imgBuffer, img)
+	assert.NoError(t, err)
+
+	// Собираем валидный multipart/form-data body вручную
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("image", "profile_pic.png")
+	assert.NoError(t, err)
+	_, err = part.Write(imgBuffer.Bytes())
+	assert.NoError(t, err)
+	writer.Close()
+
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/avatars", body)
-	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("X-User-ID", "user-identity-ok")
 	rr := httptest.NewRecorder()
+
 	h.PostUploadAvatarHandler(rr, req)
+
 	// Проверяем HTTP статус успеха
 	assert.Equal(t, http.StatusCreated, rr.Code)
 
 	// Проверяем тело ответа хэндлера
 	var res handler.AvatarResponse
-	err := json.Unmarshal(rr.Body.Bytes(), &res)
+	err = json.Unmarshal(rr.Body.Bytes(), &res)
 	assert.NoError(t, err)
 	assert.NotEmpty(t, res.ID)
 	assert.Equal(t, "user-identity-ok", res.UserID)
@@ -309,13 +386,15 @@ func TestPostUploadAvatarHandler_Success(t *testing.T) {
 	assert.Equal(t, "image/png", capturedAvatar.MimeType)
 	assert.Equal(t, "uploading", capturedAvatar.UploadStatus)
 
-	// При успехе триггеры отката сбрасываются в false,
-	// поэтому методы RemoveObject и Delete вызываться НЕ ДОЛЖНЫ.
+	// Проверяем, что хендлер успешно вытащил размеры картинки 100x100 и записал в БД
+	assert.Equal(t, 100, capturedAvatar.Width)
+	assert.Equal(t, 100, capturedAvatar.Height)
+
+	// При успехе триггеры отката сбрасываются, методы RemoveObject и SoftDelete вызываться НЕ ДОЛЖНЫ.
 	mockMinio.AssertNotCalled(t, "RemoveObject", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
-	mockRepo.AssertNotCalled(t, "Delete", mock.Anything, mock.Anything)
+	mockRepo.AssertNotCalled(t, "SoftDelete", mock.Anything, mock.Anything)
 
 	mockMinio.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
 	mockKafka.AssertExpectations(t)
-
 }

@@ -3,7 +3,7 @@ package handler_test
 import (
 	"encoding/json"
 	"gophprofile/internal/handler"
-	"gophprofile/internal/repository"
+	"gophprofile/internal/repository/mocks"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,9 +15,9 @@ import (
 
 func TestHealthCheckHandler_AllUp(t *testing.T) {
 	// Инициализируем моки для ВСЕХ четырех компонентов
-	mockRepo := new(repository.MockAvatarRepository)
-	mockMinio := new(repository.MockMinioClient)
-	mockKafka := new(repository.MockKafkaProducer)
+	mockRepo := new(mocks.MockAvatarRepository)
+	mockMinio := new(mocks.MockMinioClient)
+	mockKafka := new(mocks.MockKafkaProducer)
 	discardLogger := slog.New(slog.DiscardHandler)
 
 	// Передаем все три мока в хэндлер

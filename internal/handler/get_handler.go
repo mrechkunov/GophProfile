@@ -13,12 +13,6 @@ import (
 
 // GET /api/v1/avatars/{avatar_id}
 func (h *AvatarHandler) GetAvatarHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
 	avatarID := chi.URLParam(r, "avatar_id")
 	if avatarID == "" {
 		w.Header().Set("Content-Type", "application/json")
@@ -108,17 +102,15 @@ func (h *AvatarHandler) GetAvatarHandler(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusOK)
 
 	// Копируем напрямую из object
-	_, _ = io.Copy(w, object)
+	_, err = io.Copy(w, object)
+	if err != nil {
+		h.logger.ErrorContext(r.Context(), "error while coping from s3 object to responce", "err", err)
+	}
 }
 
 // GET /api/v1/avatars/{avatar_id}/metadata
 func (h *AvatarHandler) GetAvatarMetadataHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
 
 	avatarID := chi.URLParam(r, "avatar_id")
 	if avatarID == "" {
@@ -148,10 +140,9 @@ func (h *AvatarHandler) GetAvatarMetadataHandler(w http.ResponseWriter, r *http.
 		})
 	}
 
-	// Поля заглушки
 	dims := Dimensions{
-		Width:  1920,
-		Height: 1080,
+		Width:  avatar.Width,
+		Height: avatar.Height,
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -170,11 +161,6 @@ func (h *AvatarHandler) GetAvatarMetadataHandler(w http.ResponseWriter, r *http.
 
 // GET /api/v1/users/{user_id}/avatar
 func (h *AvatarHandler) GetUserAvatarHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
 
 	userID := chi.URLParam(r, "user_id")
 	if userID == "" {
@@ -266,5 +252,8 @@ func (h *AvatarHandler) GetUserAvatarHandler(w http.ResponseWriter, r *http.Requ
 	w.WriteHeader(http.StatusOK)
 
 	// Пишем байты из нативного *minio.Object в HTTP-ответ
-	_, _ = io.Copy(w, object)
+	_, err = io.Copy(w, object)
+	if err != nil {
+		h.logger.ErrorContext(r.Context(), "error while coping from s3 object to responce", "err", err)
+	}
 }

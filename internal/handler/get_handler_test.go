@@ -6,7 +6,7 @@ import (
 	"errors"
 	"gophprofile/internal/handler"
 	"gophprofile/internal/model"
-	"gophprofile/internal/repository"
+	"gophprofile/internal/repository/mocks"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -20,7 +20,7 @@ import (
 
 // Тест сценария 404: Аватарка не найдена в Базе Данных
 func TestGetAvatarHandler_Binary_NotFound(t *testing.T) {
-	mockRepo := new(repository.MockAvatarRepository)
+	mockRepo := new(mocks.MockAvatarRepository)
 	discardLogger := slog.New(slog.DiscardHandler)
 	h := handler.NewAvatarHandler(mockRepo, nil, nil, discardLogger)
 
@@ -67,7 +67,7 @@ func TestGetAvatarHandler_Binary_InvalidSize(t *testing.T) {
 }
 
 func TestGetAvatarMetadataHandler_Success(t *testing.T) {
-	mockRepo := new(repository.MockAvatarRepository)
+	mockRepo := new(mocks.MockAvatarRepository)
 	discardLogger := slog.New(slog.DiscardHandler)
 	h := handler.NewAvatarHandler(mockRepo, nil, nil, discardLogger)
 
@@ -86,6 +86,8 @@ func TestGetAvatarMetadataHandler_Success(t *testing.T) {
 		ProcessingStatus: "completed",
 		CreatedAt:        now,
 		UpdatedAt:        now,
+		Width:            1200,
+		Height:           800,
 	}
 
 	mockRepo.On("GetByID", mock.Anything, "avatar-uuid-111").Return(expectedAvatar, nil)
@@ -115,7 +117,8 @@ func TestGetAvatarMetadataHandler_Success(t *testing.T) {
 	assert.Equal(t, int64(1024000), res.Size)
 
 	// Проверка вложенных структур
-	assert.Equal(t, 1920, res.Dimensions.Width)
+	assert.Equal(t, 1200, res.Dimensions.Width)
+	assert.Equal(t, 800, res.Dimensions.Height)
 	assert.Len(t, res.Thumbnails, 2)
 	assert.Equal(t, "100x100", res.Thumbnails[0].Size)
 	assert.Contains(t, res.Thumbnails[0].URL, "resized/100x100_avatar.jpg")
@@ -124,7 +127,7 @@ func TestGetAvatarMetadataHandler_Success(t *testing.T) {
 }
 
 func TestGetUserAvatarHandler_Binary_NotFound(t *testing.T) {
-	mockRepo := new(repository.MockAvatarRepository)
+	mockRepo := new(mocks.MockAvatarRepository)
 	discardLogger := slog.New(slog.DiscardHandler)
 	h := handler.NewAvatarHandler(mockRepo, nil, nil, discardLogger)
 

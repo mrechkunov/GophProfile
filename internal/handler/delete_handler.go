@@ -1,11 +1,12 @@
 package handler
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"gophprofile/internal/config"
 	"gophprofile/internal/model"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/segmentio/kafka-go"
@@ -14,12 +15,6 @@ import (
 // DELETE /api/v1/avatars/{avatar_id}
 func (h *AvatarHandler) DeleteAvatarHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-
-	if r.Method != http.MethodDelete {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
 	userID := r.Header.Get("X-User-ID")
 	if userID == "" {
 		w.WriteHeader(http.StatusBadRequest)
@@ -37,7 +32,7 @@ func (h *AvatarHandler) DeleteAvatarHandler(w http.ResponseWriter, r *http.Reque
 	// Делаем быстрый GetByID, чтобы проверить права (owner) до изменения состояния бд
 	avatar, err := h.repo.GetByID(r.Context(), avatarID)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, sql.ErrNoRows) {
 			w.WriteHeader(http.StatusNotFound)
 			json.NewEncoder(w).Encode(ErrorResponse{Error: "Avatar not found"})
 			return

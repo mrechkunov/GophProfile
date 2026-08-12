@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"gophprofile/internal/model"
-	"gophprofile/internal/repository"
+	"gophprofile/internal/repository/mocks"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -23,7 +23,7 @@ func TestResizeProcessor_ProcessResizeTask_InvalidJSON(t *testing.T) {
 
 // ТЕСТЫ ОЧИСТКИ S3 (SOFT-DELETE CLEANER)
 func TestAvatarDeleteWorker_ProcessDeleteTask_Success(t *testing.T) {
-	mockMinio := new(repository.MockMinioClient)
+	mockMinio := new(mocks.MockMinioClient)
 	discardLogger := slog.New(slog.DiscardHandler)
 	w := NewAvatarDeleteWorker(mockMinio, discardLogger)
 

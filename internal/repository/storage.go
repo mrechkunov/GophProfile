@@ -9,9 +9,6 @@ import (
 	"gophprofile/internal/config"
 	"gophprofile/internal/model"
 	"time"
-
-	"github.com/jackc/pgx/v5"
-	"github.com/stretchr/testify/mock"
 )
 
 type AvatarRepository interface {
@@ -36,7 +33,7 @@ func (r *PostgresAvatarRepository) Create(ctx context.Context, avatar *model.Ava
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, 1*time.Second)
 	defer cancel()
 	sqlStatement := `
-		INSERT INTO avatars (uuid, user_id, file_name, mime_type, size_bytes, s3_key, upload_status, processing_status)
+		INSERT INTO avatars (uuid, user_id, file_name, mime_type, size_bytes, s3_key, upload_status, processing_status, width, height)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
 	_, err := r.db.ExecContext(ctxWithTimeout, sqlStatement,
@@ -48,6 +45,8 @@ func (r *PostgresAvatarRepository) Create(ctx context.Context, avatar *model.Ava
 		avatar.S3Key,
 		avatar.UploadStatus,
 		avatar.ProcessingStatus,
+		avatar.Width,
+		avatar.Height,
 	)
 	return err
 }
@@ -87,7 +86,7 @@ func (r *PostgresAvatarRepository) SoftDelete(ctx context.Context, id string) (*
 	)
 
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.New("avatar not found")
 		}
 		return nil, err
@@ -101,7 +100,7 @@ func (r *PostgresAvatarRepository) GetByID(ctx context.Context, avatarID string)
 	sqlStatement := `
 		SELECT uuid, user_id, file_name, mime_type, size_bytes, s3_key, 
 		       thumbnail_s3_keys, upload_status, processing_status, 
-		       created_at, updated_at
+		       created_at, updated_at, width, height
 		FROM avatars
 		WHERE uuid = $1 AND deleted_at IS NULL
 	`
@@ -119,10 +118,12 @@ func (r *PostgresAvatarRepository) GetByID(ctx context.Context, avatarID string)
 		&avatar.ProcessingStatus,
 		&avatar.CreatedAt,
 		&avatar.UpdatedAt,
+		&avatar.Width,
+		&avatar.Height,
 	)
 
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.New("avatar not found")
 		}
 		return nil, err
@@ -136,7 +137,7 @@ func (r *PostgresAvatarRepository) GetByUserID(ctx context.Context, userID strin
 	sqlStatement := `
 		SELECT uuid, user_id, file_name, mime_type, size_bytes, s3_key, 
 		       thumbnail_s3_keys, upload_status, processing_status, 
-		       created_at, updated_at
+		       created_at, updated_at, width, height
 		FROM avatars
 		WHERE user_id = $1 AND deleted_at IS NULL
 		ORDER BY created_at DESC
@@ -156,10 +157,12 @@ func (r *PostgresAvatarRepository) GetByUserID(ctx context.Context, userID strin
 		&avatar.ProcessingStatus,
 		&avatar.CreatedAt,
 		&avatar.UpdatedAt,
+		&avatar.Width,
+		&avatar.Height,
 	)
 
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, errors.New("avatar not found")
 		}
 		return nil, err
@@ -170,46 +173,4 @@ func (r *PostgresAvatarRepository) GetByUserID(ctx context.Context, userID strin
 
 func (r *PostgresAvatarRepository) Ping(ctx context.Context) error {
 	return r.db.PingContext(ctx)
-}
-
-type MockAvatarRepository struct {
-	mock.Mock
-}
-
-func (m *MockAvatarRepository) Create(ctx context.Context, avatar *model.Avatar) error {
-	args := m.Called(ctx, avatar)
-	return args.Error(0)
-}
-func (m *MockAvatarRepository) UpdateStatus(ctx context.Context, id string, status string, thumbnailsJSON []byte) error {
-	args := m.Called(ctx, id, status, thumbnailsJSON)
-	return args.Error(0)
-}
-
-func (m *MockAvatarRepository) Ping(ctx context.Context) error {
-	args := m.Called(ctx)
-	return args.Error(0)
-}
-
-func (m *MockAvatarRepository) GetByID(ctx context.Context, avatarID string) (*model.Avatar, error) {
-	args := m.Called(ctx, avatarID)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*model.Avatar), args.Error(1)
-}
-
-func (m *MockAvatarRepository) GetByUserID(ctx context.Context, userID string) (*model.Avatar, error) {
-	args := m.Called(ctx, userID)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*model.Avatar), args.Error(1)
-}
-
-func (m *MockAvatarRepository) SoftDelete(ctx context.Context, id string) (*model.Avatar, error) {
-	args := m.Called(ctx, id)
-	if args.Get(0) == nil {
-		return nil, args.Error(1)
-	}
-	return args.Get(0).(*model.Avatar), args.Error(1)
 }
