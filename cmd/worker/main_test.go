@@ -16,7 +16,7 @@ import (
 //ТЕСТЫ РЕСАЙЗА (RESIZE)
 
 func TestResizeProcessor_ProcessResizeTask_InvalidJSON(t *testing.T) {
-	p := NewResizeProcessor(nil, nil)
+	p := NewResizeProcessor(nil, nil, nil)
 	err := p.ProcessResizeTask(context.Background(), []byte(`{broken-json`))
 	assert.Error(t, err)
 }

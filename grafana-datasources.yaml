@@ -9,3 +9,12 @@ datasources:
     editable: true
     jsonData:
       maxLines: 1000
+
+  # - name: OpenSearch
+  #   type: grafana-opensearch-datasource
+  #   access: proxy
+  #   url: http://opensearch:9200
+  #   jsonData:
+  #     flavor: opensearch
+  #     version: 3.4.0
+  #     timeField: "@timestamp" 

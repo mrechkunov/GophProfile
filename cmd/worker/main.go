@@ -45,12 +45,13 @@ func init() {
 // ==========================================
 
 type ResizeProcessor struct {
-	s3   repository.MinioClientAPI
-	repo repository.AvatarRepository
+	s3     repository.MinioClientAPI
+	repo   repository.AvatarRepository
+	logger *slog.Logger
 }
 
-func NewResizeProcessor(s3 repository.MinioClientAPI, repo repository.AvatarRepository) *ResizeProcessor {
-	return &ResizeProcessor{s3: s3, repo: repo}
+func NewResizeProcessor(s3 repository.MinioClientAPI, repo repository.AvatarRepository, logger *slog.Logger) *ResizeProcessor {
+	return &ResizeProcessor{s3: s3, repo: repo, logger: logger}
 }
 
 func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) error {
@@ -59,7 +60,7 @@ func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) er
 		return fmt.Errorf("failed to unmarshal JSON task: %w", err)
 	}
 
-	logger.Log.InfoContext(ctx, "Processing resize for AvatarID", "AvatarID", task.AvatarID)
+	p.logger.InfoContext(ctx, "Processing resize for AvatarID", "AvatarID", task.AvatarID)
 
 	object, err := p.s3.GetObject(ctx, task.BucketName, task.ObjectKey, minio.GetObjectOptions{})
 	if err != nil {
@@ -121,7 +122,7 @@ func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) er
 		return fmt.Errorf("failed to update avatar row in database: %w", err)
 	}
 
-	logger.Log.InfoContext(ctx, "Successfully processed and saved thumbnails for AvatarID", "AvatarID", task.AvatarID)
+	p.logger.InfoContext(ctx, "Successfully processed and saved thumbnails for AvatarID", "AvatarID", task.AvatarID)
 	return nil
 }
 
@@ -178,7 +179,7 @@ func main() {
 	s3Client := config.ConnWorker.MinioClient
 
 	// Создаем экземпляры наших процессоров логики
-	resizeProcessor := NewResizeProcessor(s3Client, repo)
+	resizeProcessor := NewResizeProcessor(s3Client, repo, logger.Log)
 	deleteWorker := NewAvatarDeleteWorker(s3Client, logger.Log)
 
 	// Настраиваем Kafka ридеров для каждого топика
@@ -209,9 +210,7 @@ func main() {
 	logger.Log.InfoContext(ctx, "Combined Avatar Worker Daemon started successfully...")
 
 	// Рутина 1: Слушаем задачи на ресайз
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		logger.Log.InfoContext(ctx, "Subscribed to topic:", "", config.KafkaResizeTopic)
 		for {
 			msg, err := resizeReader.FetchMessage(ctx)
@@ -232,12 +231,10 @@ func main() {
 				logger.Log.ErrorContext(ctx, "Failed to commit resize message:", "err", err)
 			}
 		}
-	}()
+	})
 
 	// Рутина 2: Слушаем задачи на очистку хранилища (Soft Delete)
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		logger.Log.InfoContext(ctx, "Subscribed to topic:", "", config.KafkaDeleteTopic)
 		for {
 			msg, err := deleteReader.FetchMessage(ctx)
@@ -258,7 +255,7 @@ func main() {
 				logger.Log.ErrorContext(ctx, "Failed to commit delete message:", "err", err)
 			}
 		}
-	}()
+	})
 
 	// Ожидаем завершения горутин при системном сигнале SIGTERM
 	<-ctx.Done()

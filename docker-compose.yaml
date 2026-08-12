@@ -105,17 +105,56 @@ services:
     restart: unless-stopped
 
   otel-collector:
-    image: otel/opentelemetry-collector:0.143.0
+    image: otel/opentelemetry-collector-contrib:0.143.0
     container_name: otel-collector
     ports:
       - "4317:4317"
       - "13133:13133"
     command:
-      - "--config=/etc/otel-collector-config.yml"
+      - "--config=/etc/otel-collector-config.yaml"
     volumes:
-      - ./otel-collector-config.yaml:/etc/otel-collector-config.yml:ro
+      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otel-collector-config.yaml"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+  
+  opensearch:
+    image: opensearchproject/opensearch:3.4.0
+    container_name: opensearch
+    ports:
+      - "9200:9200"
+    environment:
+      - discovery.type=single-node
+      - DISABLE_SECURITY_PLUGIN=true
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", 'python3.9 -c "import urllib.request; urllib.request.urlopen(''http://localhost:9200/_cluster/health'', timeout=2)"',]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
     depends_on:
-      - loki
+      otel-collector:
+        condition: service_healthy
+    restart: unless-stopped
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:3.4.0
+    container_name: opensearch-dashboards
+    ports:
+      - 5601:5601
+    environment:
+      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
+    depends_on:
+      opensearch:
+        condition: service_healthy
     restart: unless-stopped
 
   loki:
@@ -128,6 +167,9 @@ services:
     volumes:
       - ./loki-config.yaml:/etc/loki/local-config.yml:ro
       - loki-data:/loki
+    depends_on:
+      otel-collector:
+        condition: service_healthy
     restart: unless-stopped
 
   grafana:
@@ -135,11 +177,18 @@ services:
     container_name: grafana
     ports:
       - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_INSTALL_PLUGINS=grafana-opensearch-datasource
     volumes:
       - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yml:ro
       - grafana-data:/var/lib/grafana
     depends_on:
-      - loki
+      opensearch:
+        condition: service_healthy
+      loki:
+        condition: service_started
     restart: unless-stopped
 
 volumes:
@@ -148,3 +197,4 @@ volumes:
   minio_data:
   loki-data:
   grafana-data:
+  opensearch-data:

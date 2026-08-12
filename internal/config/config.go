@@ -177,11 +177,11 @@ func configureKafka(ctx context.Context, cfg Config) (*kafka.Writer, error) {
 		logger.Log.ErrorContext(ctx, err.Error())
 		return nil, err
 	}
-	logger.Log.InfoContext(ctx, "Topics are created sucsessfuly!", KafkaResizeTopic, KafkaResizeTopic)
+	logger.Log.InfoContext(ctx, "Topics are created sucsessfuly!", "resize name", KafkaResizeTopic, "delete name", KafkaDeleteTopic)
 
 	// Настройка продюсера (Writer)
 	writer := &kafka.Writer{
-		Addr:     kafka.TCP(cfg.KafkaBrokers), // Адрес вашего Kafka-брокера
+		Addr:     kafka.TCP(cfg.KafkaBrokers), // Адрес Kafka-брокера
 		Balancer: &kafka.LeastBytes{},         // Алгоритм распределения по партициям
 	}
 	return writer, nil
@@ -222,7 +222,7 @@ func InitWorker(ctx context.Context) {
 		logger.Log.ErrorContext(ctx, "error while minio client creating:", "err", err)
 		return
 	}
-	// Настройка продюсера
+	// Настройка продюсера kafka
 	ConnWorker.KafkaProducer = &kafka.Writer{
 		Addr:     kafka.TCP(CfgWorker.KafkaBrokers),
 		Balancer: &kafka.LeastBytes{},
