@@ -34,7 +34,7 @@ func (r *PostgresAvatarRepository) Create(ctx context.Context, avatar *model.Ava
 	defer cancel()
 	sqlStatement := `
 		INSERT INTO avatars (uuid, user_id, file_name, mime_type, size_bytes, s3_key, upload_status, processing_status, width, height)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`
 	_, err := r.db.ExecContext(ctxWithTimeout, sqlStatement,
 		avatar.UUID,

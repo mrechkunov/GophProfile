@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"sync"
 	"syscall"
-	"time"
 
 	"gophprofile/internal/config"
 	"gophprofile/internal/logger"
@@ -34,6 +33,10 @@ const (
 	BucketName         = "avatars"
 )
 
+// локальный логгер
+var log *slog.Logger
+var otelShutdown func()
+
 func init() {
 	// Регистрируем WebP декодер для ресайза
 	image.RegisterFormat("webp", "RIFF????WEBP", webp.Decode, webp.DecodeConfig)
@@ -49,8 +52,11 @@ type ResizeProcessor struct {
 	logger *slog.Logger
 }
 
-func NewResizeProcessor(s3 repository.MinioClientAPI, repo repository.AvatarRepository, logger *slog.Logger) *ResizeProcessor {
-	return &ResizeProcessor{s3: s3, repo: repo, logger: logger}
+func NewResizeProcessor(s3 repository.MinioClientAPI, repo repository.AvatarRepository, log *slog.Logger) *ResizeProcessor {
+	return &ResizeProcessor{
+		s3:     s3,
+		repo:   repo,
+		logger: log}
 }
 
 func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) error {
@@ -59,7 +65,7 @@ func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) er
 		return fmt.Errorf("failed to unmarshal JSON task: %w", err)
 	}
 
-	p.logger.InfoContext(ctx, "Processing resize for AvatarID", "AvatarID", task.AvatarID)
+	p.logger.InfoContext(ctx, "Processing resize for Avatar", "AvatarID", task.AvatarID)
 
 	object, err := p.s3.GetObject(ctx, task.BucketName, task.ObjectKey, minio.GetObjectOptions{})
 	if err != nil {
@@ -121,7 +127,7 @@ func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) er
 		return fmt.Errorf("failed to update avatar row in database: %w", err)
 	}
 
-	p.logger.InfoContext(ctx, "Successfully processed and saved thumbnails for AvatarID", "AvatarID", task.AvatarID)
+	p.logger.InfoContext(ctx, "Successfully processed and saved thumbnails for Avatar", "AvatarID", task.AvatarID)
 	return nil
 }
 
@@ -134,10 +140,10 @@ type AvatarDeleteWorker struct {
 	logger *slog.Logger
 }
 
-func NewAvatarDeleteWorker(s3 repository.MinioClientAPI, logger *slog.Logger) *AvatarDeleteWorker {
+func NewAvatarDeleteWorker(s3 repository.MinioClientAPI, log *slog.Logger) *AvatarDeleteWorker {
 	return &AvatarDeleteWorker{
 		s3:     s3,
-		logger: logger,
+		logger: log,
 	}
 }
 
@@ -169,8 +175,10 @@ func (w *AvatarDeleteWorker) ProcessDeleteTask(ctx context.Context, payload []by
 // ==========================================
 
 func main() {
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	log, otelShutdown = logger.InitLoggerProvider(ctx)
 	config.InitWorker(ctx)
 
 	// Инициализируем общие для обоих процессов зависимости (БД на pgx/v5 и MinIO)
@@ -178,8 +186,8 @@ func main() {
 	s3Client := config.ConnWorker.MinioClient
 
 	// Создаем экземпляры наших процессоров логики
-	resizeProcessor := NewResizeProcessor(s3Client, repo, logger.Log)
-	deleteWorker := NewAvatarDeleteWorker(s3Client, logger.Log)
+	resizeProcessor := NewResizeProcessor(s3Client, repo, log)
+	deleteWorker := NewAvatarDeleteWorker(s3Client, log)
 
 	// Настраиваем Kafka ридеров для каждого топика
 	resizeReader := kafka.NewReader(kafka.ReaderConfig{
@@ -201,64 +209,67 @@ func main() {
 	defer deleteReader.Close()
 
 	// Настраиваем Graceful Shutdown через контекст
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctxSig, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	var wg sync.WaitGroup
 
-	logger.Log.InfoContext(ctx, "Combined Avatar Worker Daemon started successfully...")
+	log.InfoContext(ctx, "Combined Avatar Worker Daemon started successfully!")
 
 	// Рутина 1: Слушаем задачи на ресайз
-	wg.Go(func() {
-		logger.Log.InfoContext(ctx, "Subscribed to topic:", "", config.KafkaResizeTopic)
+	wg.Add(1)
+	go func() {
+		log.InfoContext(ctx, "Subscribed to topic in kafka", "topic", config.KafkaResizeTopic)
 		for {
 			msg, err := resizeReader.FetchMessage(ctx)
 			if err != nil {
 				if ctx.Err() != nil {
 					break
 				}
-				logger.Log.ErrorContext(ctx, "Error fetching resize message:", "err", err)
+				log.ErrorContext(ctx, "Error fetching resize message:", "err", err)
 				continue
 			}
 
 			if err := resizeProcessor.ProcessResizeTask(ctx, msg.Value); err != nil {
-				logger.Log.ErrorContext(ctx, "Failed to resize avatar for key:", "key", string(msg.Key), "err", err)
+				log.ErrorContext(ctx, "Failed to resize avatar for key:", "key", string(msg.Key), "err", err)
 				continue
 			}
 
 			if err := resizeReader.CommitMessages(ctx, msg); err != nil {
-				logger.Log.ErrorContext(ctx, "Failed to commit resize message:", "err", err)
+				log.ErrorContext(ctx, "Failed to commit resize message:", "err", err)
 			}
 		}
-	})
+	}()
 
 	// Рутина 2: Слушаем задачи на очистку хранилища (Soft Delete)
-	wg.Go(func() {
-		logger.Log.InfoContext(ctx, "Subscribed to topic:", "", config.KafkaDeleteTopic)
+	wg.Add(1)
+	go func() {
+		log.InfoContext(ctx, "Subscribed to topic in kafka", "topic", config.KafkaDeleteTopic)
 		for {
 			msg, err := deleteReader.FetchMessage(ctx)
 			if err != nil {
 				if ctx.Err() != nil {
 					break
 				}
-				logger.Log.ErrorContext(ctx, "Error fetching delete message:", "err", err)
+				log.ErrorContext(ctx, "Error fetching delete message:", "err", err)
 				continue
 			}
 
 			if err := deleteWorker.ProcessDeleteTask(ctx, msg.Value); err != nil {
-				logger.Log.ErrorContext(ctx, "Failed to clear S3 layout for key:", "key", string(msg.Key), "err", err)
+				log.ErrorContext(ctx, "Failed to clear S3 layout for key:", "key", string(msg.Key), "err", err)
 				continue
 			}
 
 			if err := deleteReader.CommitMessages(ctx, msg); err != nil {
-				logger.Log.ErrorContext(ctx, "Failed to commit delete message:", "err", err)
+				log.ErrorContext(ctx, "Failed to commit delete message:", "err", err)
 			}
 		}
-	})
+	}()
 
 	// Ожидаем завершения горутин при системном сигнале SIGTERM
-	<-ctx.Done()
-	logger.Log.InfoContext(ctx, "Stopping worker consumers gracefully...")
+	<-ctxSig.Done()
+	log.InfoContext(ctx, "Stopping worker consumers gracefully...")
 	wg.Wait()
-	logger.Log.InfoContext(ctx, "All background processes successfully stopped.")
+	log.InfoContext(ctx, "All background processes successfully stopped.")
+	otelShutdown()
 }

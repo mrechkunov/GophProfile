@@ -30,5 +30,4 @@ COPY --from=builder /app/worker .
 EXPOSE 8080
 
 # Запуск приложения
-CMD ["sh", "-c", "./gophprofile"]
-# & ./worker"]
+CMD ["sh", "-c", "./gophprofile & ./worker"]

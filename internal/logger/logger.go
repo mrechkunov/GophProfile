@@ -14,7 +14,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
-// глобальный логгер
+// глобальный логгер server
 var Log *slog.Logger
 var OtelShutdown func()
 
@@ -54,7 +54,7 @@ func InitLoggerProvider(ctx context.Context) (*slog.Logger, func()) {
 	logger := slog.New(handler)
 
 	// Устанавливаем как глобальный логгер
-	slog.SetDefault(logger)
+	// slog.SetDefault(logger)
 
 	// Возвращаем функцию для корректного завершения (flush данных перед выходом)
 	shutdown := func() {
