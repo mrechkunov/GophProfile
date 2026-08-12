@@ -6,11 +6,15 @@ import (
 	"gophprofile/internal/config"
 	"gophprofile/internal/model"
 	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
 	"time"
+
+	_ "golang.org/x/image/webp"
 
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
