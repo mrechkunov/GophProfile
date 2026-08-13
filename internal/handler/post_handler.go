@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"gophprofile/internal/config"
@@ -14,6 +15,10 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 	_ "golang.org/x/image/webp"
 
 	"github.com/google/uuid"
@@ -24,24 +29,51 @@ import (
 // POST /api/v1/avatars
 func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	h.logger.InfoContext(r.Context(), "Procesing AvatarUpload requiest")
+
+	// Создаем корневой спан для всего HTTP запроса
+	ctx, span := tracer.Start(r.Context(), "PostUploadAvatarHandler",
+		trace.WithSpanKind(trace.SpanKindServer),
+	)
+	defer span.End()
+
+	h.logger.InfoContext(ctx, "Processing AvatarUpload request")
 
 	userID := r.Header.Get("X-User-ID")
 	if userID == "" {
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", "missing_user_id"),
+		))
+		span.SetStatus(codes.Error, "Missing X-User-ID header")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Missing X-User-ID header"})
 		return
 	}
+	span.SetAttributes(attribute.String("user.id", userID))
 
 	r.Body = http.MaxBytesReader(w, r.Body, MaxFileSize)
 	defer r.Body.Close()
 
 	if err := r.ParseMultipartForm(MaxFileSize); err != nil {
+		reason := "invalid_multipart"
 		if strings.Contains(err.Error(), "request body too large") {
+			reason = "body_too_large"
+			h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("status", "error"),
+				attribute.String("reason", reason),
+			))
+			span.RecordError(err)
+			span.SetStatus(codes.Error, "Request body too large")
 			w.WriteHeader(http.StatusRequestEntityTooLarge)
 			json.NewEncoder(w).Encode(SizeErrorResponse{Error: "File too large", MaxSize: MaxFileSize})
 			return
 		}
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", reason),
+		))
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "Invalid multipart form")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid multipart form", Details: err.Error()})
 		return
@@ -49,6 +81,11 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 
 	file, fileHeader, err := r.FormFile("image")
 	if err != nil {
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", "missing_file_field"),
+		))
+		span.SetStatus(codes.Error, "Missing file field")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Missing file field"})
 		return
@@ -56,6 +93,11 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 	defer file.Close()
 
 	if fileHeader.Size > MaxFileSize {
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", "file_too_large"),
+		))
+		span.SetStatus(codes.Error, "File size limit exceeded")
 		w.WriteHeader(http.StatusRequestEntityTooLarge)
 		json.NewEncoder(w).Encode(SizeErrorResponse{Error: "File too large", MaxSize: MaxFileSize})
 		return
@@ -63,12 +105,22 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 
 	buff := make([]byte, 512)
 	if _, err = file.Read(buff); err != nil {
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", "read_header_failed"),
+		))
+		span.RecordError(err)
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to read file header"})
 		return
 	}
 
-	if _, err = file.Seek(0, 0); err != nil {
+	if _, err = file.Seek(0, io.SeekStart); err != nil {
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", "seek_failed"),
+		))
+		span.RecordError(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Internal file seeking error"})
 		return
@@ -82,6 +134,11 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 	}
 
 	if !validTypes[realContentType] {
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", "invalid_mime_type"),
+		))
+		span.SetStatus(codes.Error, "Unsupported MIME type: "+realContentType)
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(ErrorResponse{
 			Error:   "Invalid file format",
@@ -92,6 +149,11 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 
 	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
 	if ext != ".jpeg" && ext != ".jpg" && ext != ".png" && ext != ".webp" {
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", "invalid_extension"),
+		))
+		span.SetStatus(codes.Error, "Unsupported file extension")
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid file extension"})
 		return
@@ -99,16 +161,34 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 
 	imgConfig, _, err := image.DecodeConfig(file)
 	if err != nil {
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", "decode_config_failed"),
+		))
+		span.RecordError(err)
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Invalid image data", Details: "Failed to parse dimensions"})
 		return
 	}
-	if seeker, ok := file.(io.ReadSeeker); ok {
-		seeker.Seek(0, io.SeekStart)
+
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", "seek_post_decode_failed"),
+		))
+		span.RecordError(err)
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(ErrorResponse{Error: "Internal file seeking error"})
+		return
 	}
 
 	avatarID := uuid.New().String()
 	objectKey := fmt.Sprintf("originals/%s%s", avatarID, ext)
+
+	span.SetAttributes(
+		attribute.String("avatar.id", avatarID),
+		attribute.String("avatar.s3_key", objectKey),
+	)
 
 	var s3Uploaded bool
 	var dbCreated bool
@@ -117,23 +197,39 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 		if !s3Uploaded && !dbCreated {
 			return
 		}
-		// Запускаем очистку ресурсов при сбое
+		cleanupCtx := context.Background()
 		if s3Uploaded {
-			_ = h.s3.RemoveObject(r.Context(), BucketName, objectKey, minio.RemoveObjectOptions{})
+			_ = h.s3.RemoveObject(cleanupCtx, BucketName, objectKey, minio.RemoveObjectOptions{})
 		}
 		if dbCreated {
-			// Вызываем SoftDelete вместо жесткого удаления строки
-			_, _ = h.repo.SoftDelete(r.Context(), avatarID)
+			_, _ = h.repo.SoftDelete(cleanupCtx, avatarID)
 		}
 	}()
 
-	_, err = h.s3.PutObject(r.Context(), BucketName, objectKey, file, fileHeader.Size, minio.PutObjectOptions{
-		ContentType: realContentType,
-	})
+	// Вложенный Спан для Minio
+	err = func() error {
+		_, s3Span := tracer.Start(ctx, "Minio:PutObject", trace.WithSpanKind(trace.SpanKindClient))
+		defer s3Span.End()
+
+		_, putErr := h.s3.PutObject(ctx, BucketName, objectKey, file, fileHeader.Size, minio.PutObjectOptions{
+			ContentType: realContentType,
+		})
+		if putErr != nil {
+			s3Span.RecordError(putErr)
+			s3Span.SetStatus(codes.Error, "S3 Upload Failed")
+			return putErr
+		}
+		return nil
+	}()
+
 	if err != nil {
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", "s3_upload_failed"),
+		))
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to save file to storage"})
-		h.logger.ErrorContext(r.Context(), "error while putting object into minio")
+		h.logger.ErrorContext(ctx, "error while putting object into minio", "err", err)
 		return
 	}
 	s3Uploaded = true
@@ -153,11 +249,22 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 		Height:           imgConfig.Height,
 	}
 
-	err = h.repo.Create(r.Context(), &avatar)
+	// Вложенный Спан для Базы Данных
+	err = func() error {
+		_, dbSpan := tracer.Start(ctx, "Database:CreateAvatar", trace.WithSpanKind(trace.SpanKindClient))
+		defer dbSpan.End()
+
+		return h.repo.Create(ctx, &avatar)
+	}()
+
 	if err != nil {
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", "db_create_failed"),
+		))
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to save avatar metadata"})
-		h.logger.WarnContext(r.Context(), "error while write new avatar in db", "err", err)
+		h.logger.WarnContext(ctx, "error while write new avatar in db", "err", err)
 		return
 	}
 	dbCreated = true
@@ -172,23 +279,39 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 
 	taskBytes, err := json.Marshal(task)
 	if err != nil {
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", "json_marshal_failed"),
+		))
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "internal event serialization error"})
 		return
 	}
 
-	err = h.kafka.WriteMessages(r.Context(), kafka.Message{
-		Topic: config.KafkaResizeTopic,
-		Key:   []byte(userID),
-		Value: taskBytes,
-	})
+	// Вложенный Спан для Кафки
+	err = func() error {
+		_, kafkaSpan := tracer.Start(ctx, "Kafka:WriteMessage", trace.WithSpanKind(trace.SpanKindProducer))
+		defer kafkaSpan.End()
+
+		return h.kafka.WriteMessages(ctx, kafka.Message{
+			Topic: config.KafkaResizeTopic,
+			Key:   []byte(userID),
+			Value: taskBytes,
+		})
+	}()
+
 	if err != nil {
+		h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("status", "error"),
+			attribute.String("reason", "kafka_publish_failed"),
+		))
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "failed to dispatch async task"})
-		h.logger.ErrorContext(r.Context(), "error while send message in kafka (POST /api/v1/avatars)")
+		h.logger.ErrorContext(ctx, "error while send message in kafka (POST /api/v1/avatars)", "err", err)
 		return
 	}
 
+	// Успешный исход — отменяем очистку дефером
 	s3Uploaded = false
 	dbCreated = false
 
@@ -198,7 +321,10 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 		UserID:    userID,
 		URL:       avatarURL,
 		Status:    "processing",
-		CreatedAt: time.Now().UTC(),
-	})
-	h.logger.InfoContext(r.Context(), "UploadAvatar request processing completed")
+		CreatedAt: time.Now().UTC()})
+	h.logger.InfoContext(ctx, "UploadAvatar request processing completed")
+	// Записываем финальные метрики успеха
+	h.metrics.UploadCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("status", "success")))
+	h.metrics.FileSizeHist.Record(ctx, float64(fileHeader.Size), metric.WithAttributes(attribute.String("content_type", realContentType)))
+	span.SetStatus(codes.Ok, "Avatar uploaded successfully")
 }

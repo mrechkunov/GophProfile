@@ -33,9 +33,9 @@ const (
 	BucketName         = "avatars"
 )
 
-// локальный логгер
-var log *slog.Logger
-var otelShutdown func()
+// // локальный логгер
+// var log *slog.Logger
+// var otelShutdown func()
 
 func init() {
 	// Регистрируем WebP декодер для ресайза
@@ -177,17 +177,39 @@ func (w *AvatarDeleteWorker) ProcessDeleteTask(ctx context.Context, payload []by
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-
-	log, otelShutdown = logger.InitLoggerProvider(ctx)
 	config.InitWorker(ctx)
+	//  Инициализируем провайдер логов
+	var otelLogsShutdown func()
+	logger.Log, otelLogsShutdown = logger.InitLoggerProvider(ctx)
+	defer func() {
+		if otelLogsShutdown != nil {
+			otelLogsShutdown()
+		}
+	}()
+
+	//  Инициализируем провайдер трейсинга
+	otelTracesShutdown := logger.InitTraceProvider(ctx)
+	defer func() {
+		if otelTracesShutdown != nil {
+			otelTracesShutdown()
+		}
+	}()
+
+	//  Инициализируем провайдер метрик
+	otelMetricsShutdown := logger.InitMeterProvider(ctx)
+	defer func() {
+		if otelMetricsShutdown != nil {
+			otelMetricsShutdown()
+		}
+	}()
 
 	// Инициализируем общие для обоих процессов зависимости (БД на pgx/v5 и MinIO)
 	repo := repository.NewPostgresAvatarRepository(config.ConnWorker.DB)
 	s3Client := config.ConnWorker.MinioClient
 
 	// Создаем экземпляры наших процессоров логики
-	resizeProcessor := NewResizeProcessor(s3Client, repo, log)
-	deleteWorker := NewAvatarDeleteWorker(s3Client, log)
+	resizeProcessor := NewResizeProcessor(s3Client, repo, logger.Log)
+	deleteWorker := NewAvatarDeleteWorker(s3Client, logger.Log)
 
 	// Настраиваем Kafka ридеров для каждого топика
 	resizeReader := kafka.NewReader(kafka.ReaderConfig{
@@ -214,62 +236,61 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	log.InfoContext(ctx, "Combined Avatar Worker Daemon started successfully!")
+	logger.Log.InfoContext(ctx, "Combined Avatar Worker Daemon started successfully!")
 
 	// Рутина 1: Слушаем задачи на ресайз
 	wg.Add(1)
 	go func() {
-		log.InfoContext(ctx, "Subscribed to topic in kafka", "topic", config.KafkaResizeTopic)
+		logger.Log.InfoContext(ctx, "Subscribed to topic in kafka", "topic", config.KafkaResizeTopic)
 		for {
 			msg, err := resizeReader.FetchMessage(ctx)
 			if err != nil {
 				if ctx.Err() != nil {
 					break
 				}
-				log.ErrorContext(ctx, "Error fetching resize message:", "err", err)
+				logger.Log.ErrorContext(ctx, "Error fetching resize message:", "err", err)
 				continue
 			}
 
 			if err := resizeProcessor.ProcessResizeTask(ctx, msg.Value); err != nil {
-				log.ErrorContext(ctx, "Failed to resize avatar for key:", "key", string(msg.Key), "err", err)
+				logger.Log.ErrorContext(ctx, "Failed to resize avatar for key:", "key", string(msg.Key), "err", err)
 				continue
 			}
 
 			if err := resizeReader.CommitMessages(ctx, msg); err != nil {
-				log.ErrorContext(ctx, "Failed to commit resize message:", "err", err)
+				logger.Log.ErrorContext(ctx, "Failed to commit resize message:", "err", err)
 			}
 		}
 	}()
 
-	// Рутина 2: Слушаем задачи на очистку хранилища (Soft Delete)
+	// Рутина 2: Слушаем задачи на удаление
 	wg.Add(1)
 	go func() {
-		log.InfoContext(ctx, "Subscribed to topic in kafka", "topic", config.KafkaDeleteTopic)
+		logger.Log.InfoContext(ctx, "Subscribed to topic in kafka", "topic", config.KafkaDeleteTopic)
 		for {
 			msg, err := deleteReader.FetchMessage(ctx)
 			if err != nil {
 				if ctx.Err() != nil {
 					break
 				}
-				log.ErrorContext(ctx, "Error fetching delete message:", "err", err)
+				logger.Log.ErrorContext(ctx, "Error fetching delete message:", "err", err)
 				continue
 			}
 
 			if err := deleteWorker.ProcessDeleteTask(ctx, msg.Value); err != nil {
-				log.ErrorContext(ctx, "Failed to clear S3 layout for key:", "key", string(msg.Key), "err", err)
+				logger.Log.ErrorContext(ctx, "Failed to clear S3 layout for key:", "key", string(msg.Key), "err", err)
 				continue
 			}
 
 			if err := deleteReader.CommitMessages(ctx, msg); err != nil {
-				log.ErrorContext(ctx, "Failed to commit delete message:", "err", err)
+				logger.Log.ErrorContext(ctx, "Failed to commit delete message:", "err", err)
 			}
 		}
 	}()
 
 	// Ожидаем завершения горутин при системном сигнале SIGTERM
 	<-ctxSig.Done()
-	log.InfoContext(ctx, "Stopping worker consumers gracefully...")
+	logger.Log.InfoContext(ctx, "Stopping worker consumers gracefully")
 	wg.Wait()
-	log.InfoContext(ctx, "All background processes successfully stopped.")
-	otelShutdown()
+	logger.Log.InfoContext(ctx, "All background processes successfully stopped.")
 }

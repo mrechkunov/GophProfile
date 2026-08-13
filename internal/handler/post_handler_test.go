@@ -21,6 +21,8 @@ import (
 	"github.com/minio/minio-go/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/sdk/metric"
 )
 
 // Вспомогательная функция для генерации валидного multipart тела (PNG картинка)
@@ -47,39 +49,48 @@ func createValidMultipartBody(t *testing.T, fieldName, fileName string, size int
 	return body, writer.FormDataContentType()
 }
 
-// ТЕСТОВЫЕ СЦЕНАРИИ
-
-// Метод запроса не POST
-func TestPostUploadAvatarHandler_MethodNotAllowed(t *testing.T) {
-	discardLogger := slog.New(slog.DiscardHandler)
-	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/avatars", nil)
-	rr := httptest.NewRecorder()
-
-	h.PostUploadAvatarHandler(rr, req)
-
-	assert.Equal(t, http.StatusBadRequest, rr.Code)
-}
-
-// Отсутствует заголовок X-User-ID
 func TestPostUploadAvatarHandler_MissingUserID(t *testing.T) {
+	// Настраиваем тестовый MeterProvider для изоляции метрик
+	mp := metric.NewMeterProvider()
+	otel.SetMeterProvider(mp)
+
+	// Инициализируем метрики, так как хендлер запишет туда ошибку
+	metrics, err := handler.NewAvatarMetrics()
+	assert.NoError(t, err)
+
 	discardLogger := slog.New(slog.DiscardHandler)
-	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
+
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger, metrics)
+
+	// Создаем запрос БЕЗ заголовка X-User-ID
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/avatars", nil)
 	rr := httptest.NewRecorder()
 
+	// Вызываем хендлер
 	h.PostUploadAvatarHandler(rr, req)
 
+	// Проверяем, что хендлер вернул 400 Bad Request
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
-	var res handler.ErrorResponse
-	json.Unmarshal(rr.Body.Bytes(), &res)
-	assert.Equal(t, "Missing X-User-ID header", res.Error)
+
+	// Проверяем JSON-структуру ответа на ошибку
+	var resp map[string]string
+	err = json.Unmarshal(rr.Body.Bytes(), &resp)
+	assert.NoError(t, err)
+	assert.Equal(t, "Missing X-User-ID header", resp["error"])
 }
 
-// Файл слишком большой на этапе парсинга Multipart формы (> 10MB)
 func TestPostUploadAvatarHandler_MultipartBodyTooLarge(t *testing.T) {
+	// Настраиваем тестовый MeterProvider для изоляции метрик
+	mp := metric.NewMeterProvider()
+	otel.SetMeterProvider(mp)
+
+	// Инициализируем метрики, так как хендлер будет писать туда ошибку
+	metrics, err := handler.NewAvatarMetrics()
+	assert.NoError(t, err)
+
 	discardLogger := slog.New(slog.DiscardHandler)
-	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
+
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger, metrics)
 
 	// Передаем размер больше константы MaxFileSize (10 * 1024 * 1024)
 	body, contentType := createValidMultipartBody(t, "image", "avatar.png", handler.MaxFileSize+100)
@@ -88,19 +99,34 @@ func TestPostUploadAvatarHandler_MultipartBodyTooLarge(t *testing.T) {
 	req.Header.Set("X-User-ID", "user-1")
 	rr := httptest.NewRecorder()
 
+	// Вызываем хендлер
 	h.PostUploadAvatarHandler(rr, req)
 
+	// Проверяем HTTP статус и JSON ответ
 	assert.Equal(t, http.StatusRequestEntityTooLarge, rr.Code)
+
 	var res handler.SizeErrorResponse
-	json.Unmarshal(rr.Body.Bytes(), &res)
+	err = json.Unmarshal(rr.Body.Bytes(), &res)
+	assert.NoError(t, err)
+
 	assert.Equal(t, "File too large", res.Error)
 	assert.Equal(t, int64(handler.MaxFileSize), res.MaxSize)
 }
 
-// Отсутствует нужное поле файла ("image") в форме
 func TestPostUploadAvatarHandler_MissingFileField(t *testing.T) {
+	// Изолируем метрики OpenTelemetry для теста
+	mp := metric.NewMeterProvider()
+	otel.SetMeterProvider(mp)
+
+	// Инициализируем структуру метрик
+	metrics, err := handler.NewAvatarMetrics()
+	assert.NoError(t, err)
+
 	discardLogger := slog.New(slog.DiscardHandler)
-	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
+
+	// Передаем объект метрик пятым аргументом
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger, metrics)
+
 	// Создаем форму с неверным именем поля "wrong_field"
 	body, contentType := createValidMultipartBody(t, "wrong_field", "avatar.png", 100)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/avatars", body)
@@ -108,23 +134,39 @@ func TestPostUploadAvatarHandler_MissingFileField(t *testing.T) {
 	req.Header.Set("X-User-ID", "user-1")
 	rr := httptest.NewRecorder()
 
+	// Вызываем хендлер
 	h.PostUploadAvatarHandler(rr, req)
 
+	// Проверяем код ответа и JSON
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
+
 	var res handler.ErrorResponse
-	json.Unmarshal(rr.Body.Bytes(), &res)
+	err = json.Unmarshal(rr.Body.Bytes(), &res)
+	assert.NoError(t, err)
 	assert.Equal(t, "Missing file field", res.Error)
 }
 
-// Невалидный формат файла (проверка Magic Bytes на примере plain text)
 func TestPostUploadAvatarHandler_InvalidMagicBytes(t *testing.T) {
-	discardLogger := slog.New(slog.DiscardHandler)
-	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
+	// Изолируем метрики OpenTelemetry для теста
+	mp := metric.NewMeterProvider()
+	otel.SetMeterProvider(mp)
 
+	// Инициализируем структуру метрик
+	metrics, err := handler.NewAvatarMetrics()
+	assert.NoError(t, err)
+
+	discardLogger := slog.New(slog.DiscardHandler)
+
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger, metrics)
+
+	// Формируем multipart-тело, где файл называется test.png, но внутри обычный текст
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	part, _ := writer.CreateFormFile("image", "test.png")
-	part.Write([]byte("this is plain text data, not an image layout!"))
+	part, err := writer.CreateFormFile("image", "test.png")
+	assert.NoError(t, err)
+
+	_, err = part.Write([]byte("this is plain text data, not an image layout!"))
+	assert.NoError(t, err)
 	writer.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/avatars", body)
@@ -132,48 +174,85 @@ func TestPostUploadAvatarHandler_InvalidMagicBytes(t *testing.T) {
 	req.Header.Set("X-User-ID", "user-1")
 	rr := httptest.NewRecorder()
 
+	// Вызываем хендлер
 	h.PostUploadAvatarHandler(rr, req)
 
+	// Проверяем код ответа и структуру ошибки
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
+
 	var res handler.ErrorResponse
-	json.Unmarshal(rr.Body.Bytes(), &res)
+	err = json.Unmarshal(rr.Body.Bytes(), &res)
+	assert.NoError(t, err)
 	assert.Equal(t, "Invalid file format", res.Error)
 }
 
-// Конфликт: Валидные Magic Bytes, но невалидное расширение файла (.exe)
 func TestPostUploadAvatarHandler_InvalidExtension(t *testing.T) {
+	// Настраиваем тестовый MeterProvider для изоляции метрик
+	mp := metric.NewMeterProvider()
+	otel.SetMeterProvider(mp)
+
+	// Инициализируем структуру метрик
+	metrics, err := handler.NewAvatarMetrics()
+	assert.NoError(t, err)
+
 	discardLogger := slog.New(slog.DiscardHandler)
-	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger)
-	body, contentType := createValidMultipartBody(t, "image", "malicious.exe", 100)
+
+	h := handler.NewAvatarHandler(nil, nil, nil, discardLogger, metrics)
+
+	// Генерируем валидные байты PNG, но сохраняем под расширением .exe
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("image", "malicious.exe")
+	assert.NoError(t, err)
+
+	// Пишем реальную картинку, чтобы пройти проверку http.DetectContentType
+	img := image.NewRGBA(image.Rect(0, 0, 10, 10))
+	err = png.Encode(part, img)
+	assert.NoError(t, err)
+	writer.Close()
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/avatars", body)
-	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("X-User-ID", "user-1")
 	rr := httptest.NewRecorder()
 
+	// Вызываем хендлер
 	h.PostUploadAvatarHandler(rr, req)
 
+	// Проверяем код ответа и структуру ошибки
 	assert.Equal(t, http.StatusBadRequest, rr.Code)
+
 	var res handler.ErrorResponse
-	json.Unmarshal(rr.Body.Bytes(), &res)
+	err = json.Unmarshal(rr.Body.Bytes(), &res)
+	assert.NoError(t, err)
 	assert.Equal(t, "Invalid file extension", res.Error)
 }
 
 // Сбой загрузки в MinIO (Должен вернуть 500 ошибку, откат ресурсов не требуется)
 func TestPostUploadAvatarHandler_MinioUploadError(t *testing.T) {
-	mockMinio := new(mocks.MockMinioClient)
+	// Настраиваем тестовый MeterProvider для изоляции метрик
+	mp := metric.NewMeterProvider()
+	otel.SetMeterProvider(mp)
+
+	// Инициализируем структуру метрик
+	metrics, err := handler.NewAvatarMetrics()
+	assert.NoError(t, err)
+
+	// Инициализируем мок для S3
+	mockS3 := new(mocks.MockMinioClient)
 	discardLogger := slog.New(slog.DiscardHandler)
-	h := handler.NewAvatarHandler(nil, mockMinio, nil, discardLogger)
+
+	h := handler.NewAvatarHandler(nil, mockS3, nil, discardLogger, metrics)
 
 	// Имитируем сбой сети или недоступность MinIO при попытке загрузки
-	mockMinio.On("PutObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	mockS3.On("PutObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(minio.UploadInfo{}, errors.New("s3 connection down"))
 
 	// Генерируем реальное PNG изображение 1x1 пиксель в памяти,
-	// чтобы хендлер успешно прошел image.DecodeConfig и дошел до логики PutObject!
+	// чтобы хендлер успешно прошел image.DecodeConfig и дошел до логики PutObject
 	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
 	var imgBuffer bytes.Buffer
-	err := png.Encode(&imgBuffer, img)
+	err = png.Encode(&imgBuffer, img)
 	assert.NoError(t, err)
 
 	// Собираем правильный multipart/form-data body вручную с полем "image"
@@ -190,8 +269,10 @@ func TestPostUploadAvatarHandler_MinioUploadError(t *testing.T) {
 	req.Header.Set("X-User-ID", "user-1")
 	rr := httptest.NewRecorder()
 
+	// Вызываем хендлер
 	h.PostUploadAvatarHandler(rr, req)
 
+	// Проверяем код ответа и структуру ошибки
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
 
 	var res handler.ErrorResponse
@@ -202,18 +283,28 @@ func TestPostUploadAvatarHandler_MinioUploadError(t *testing.T) {
 	assert.Equal(t, "Failed to save file to storage", res.Error)
 
 	// Убеждаемся, что метод PutObject действительно вызывался
-	mockMinio.AssertExpectations(t)
+	mockS3.AssertExpectations(t)
 }
 
 // Сбой сохранения в БД (ROLLBACK: файл должен удалиться из MinIO)
 func TestPostUploadAvatarHandler_DBInsertionError_RollbackS3(t *testing.T) {
+	// Настраиваем тестовый MeterProvider для изоляции метрик
+	mp := metric.NewMeterProvider()
+	otel.SetMeterProvider(mp)
+
+	// Инициализируем структуру метрик
+	metrics, err := handler.NewAvatarMetrics()
+	assert.NoError(t, err)
+
+	// Инициализируем локальные моки
 	mockRepo := new(mocks.MockAvatarRepository)
-	mockMinio := new(mocks.MockMinioClient)
+	mockS3 := new(mocks.MockMinioClient)
 	discardLogger := slog.New(slog.DiscardHandler)
-	h := handler.NewAvatarHandler(mockRepo, mockMinio, nil, discardLogger)
+
+	h := handler.NewAvatarHandler(mockRepo, mockS3, nil, discardLogger, metrics)
 
 	// Успешная загрузка оригинального файла в S3
-	mockMinio.On("PutObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	mockS3.On("PutObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(minio.UploadInfo{}, nil)
 
 	// Сбой при записи метаданных в БД
@@ -221,12 +312,13 @@ func TestPostUploadAvatarHandler_DBInsertionError_RollbackS3(t *testing.T) {
 		Return(errors.New("postgres connection lost"))
 
 	// ОЖИДАЕМ ОТКАТ: Удаление объекта из MinIO в блоке defer
-	mockMinio.On("RemoveObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything).
+	mockS3.On("RemoveObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything).
 		Return(nil)
 
+	// Генерируем минимальное изображение для успешного парсинга размеров
 	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
 	var imgBuffer bytes.Buffer
-	err := png.Encode(&imgBuffer, img)
+	err = png.Encode(&imgBuffer, img)
 	assert.NoError(t, err)
 
 	// Собираем правильный multipart-body вручную с полем "image"
@@ -246,6 +338,7 @@ func TestPostUploadAvatarHandler_DBInsertionError_RollbackS3(t *testing.T) {
 	// Вызов тестируемого хендлера
 	h.PostUploadAvatarHandler(rr, req)
 
+	// Валидация результатов
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
 
 	var res handler.ErrorResponse
@@ -253,24 +346,35 @@ func TestPostUploadAvatarHandler_DBInsertionError_RollbackS3(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "Failed to save avatar metadata", res.Error)
 
-	// Проверяем, что триггер RemoveObject сработал в defer
-	mockMinio.AssertExpectations(t)
+	// Проверяем, что триггер RemoveObject сработал в defer для отката S3
+	mockS3.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
 }
 
 // Сбой отправки задачи в Kafka (FULL ROLLBACK: удаление из MinIO + удаление строки из БД)
 func TestPostUploadAvatarHandler_KafkaError_FullRollback(t *testing.T) {
+	// Настраиваем тестовый MeterProvider для изоляции метрик
+	mp := metric.NewMeterProvider()
+	otel.SetMeterProvider(mp)
+
+	// Инициализируем структуру метрик нашего хендлера
+	metrics, err := handler.NewAvatarMetrics()
+	assert.NoError(t, err)
+
+	// Инициализируем локальные моки
 	mockRepo := new(mocks.MockAvatarRepository)
-	mockMinio := new(mocks.MockMinioClient)
+	mockS3 := new(mocks.MockMinioClient)
 	mockKafka := new(mocks.MockKafkaProducer)
 	discardLogger := slog.New(slog.DiscardHandler)
-	h := handler.NewAvatarHandler(mockRepo, mockMinio, mockKafka, discardLogger)
 
-	// MinIO принимает файл
-	mockMinio.On("PutObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
+	// Собираем хендлер со всеми зависимостями и метриками
+	h := handler.NewAvatarHandler(mockRepo, mockS3, mockKafka, discardLogger, metrics)
+
+	// MinIO принимает файл успешно
+	mockS3.On("PutObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything, mock.Anything, mock.Anything).
 		Return(minio.UploadInfo{}, nil)
 
-	// БД успешно создает запись
+	// БД успешно создает запись метаданных
 	mockRepo.On("Create", mock.Anything, mock.Anything).
 		Return(nil)
 
@@ -278,19 +382,18 @@ func TestPostUploadAvatarHandler_KafkaError_FullRollback(t *testing.T) {
 	mockKafka.On("WriteMessages", mock.Anything, mock.Anything).
 		Return(errors.New("kafka broker unavailable"))
 
-	// ОЖИДАЕМ ПОЛНЫЙ ОТКАТ В БЛОКЕ DEFER:
-	// Чистим файл из хранилища S3
-	mockMinio.On("RemoveObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything).
+		// ОЖИДАЕМ ПОЛНЫЙ ОТКАТ В БЛОКЕ DEFER:
+	// Чистим физический файл из хранилища S3
+	mockS3.On("RemoveObject", mock.Anything, handler.BucketName, mock.Anything, mock.Anything).
 		Return(nil)
 
 	mockRepo.On("SoftDelete", mock.Anything, mock.Anything).
-		Return(&model.Avatar{}, nil)
+		Return(&model.Avatar{UUID: "user-999"}, nil)
 
-	// Генерируем реальное PNG изображение 1x1 пиксель в памяти,
-	// чтобы хендлер успешно прошел image.DecodeConfig и дошел до логики Kafka!
+	// Генерируем реальное PNG изображение 1x1 пиксель в памяти
 	img := image.NewRGBA(image.Rect(0, 0, 1, 1))
 	var imgBuffer bytes.Buffer
-	err := png.Encode(&imgBuffer, img)
+	err = png.Encode(&imgBuffer, img)
 	assert.NoError(t, err)
 
 	// Собираем правильный multipart/form-data body вручную с полем "image"
@@ -310,7 +413,7 @@ func TestPostUploadAvatarHandler_KafkaError_FullRollback(t *testing.T) {
 	// Запуск хендлера
 	h.PostUploadAvatarHandler(rr, req)
 
-	// Проверяем HTTP статус внутренней ошибки сервера
+	// Проверка результатов
 	assert.Equal(t, http.StatusInternalServerError, rr.Code)
 
 	// Проверяем тело JSON-ответа
@@ -319,23 +422,34 @@ func TestPostUploadAvatarHandler_KafkaError_FullRollback(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "failed to dispatch async task", res.Error)
 
-	// Проверяем, что все ожидания по мокам (включая RemoveObject и SoftDelete) выполнились
-	mockMinio.AssertExpectations(t)
+	// Убеждаемся, что все ожидания по мокам (включая RemoveObject и SoftDelete в defer) успешно выполнились
+	mockS3.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
 	mockKafka.AssertExpectations(t)
 }
 
 // Успешный сценарий (все системы работают штатно)
 func TestPostUploadAvatarHandler_Success(t *testing.T) {
+	// Настраиваем тестовый MeterProvider для сбора метрик успеха
+	mp := metric.NewMeterProvider()
+	otel.SetMeterProvider(mp)
+
+	// Инициализируем структуру метрик нашего хендлера
+	metrics, err := handler.NewAvatarMetrics()
+	assert.NoError(t, err)
+
+	// Инициализируем локальные моки зависимостей
 	mockRepo := new(mocks.MockAvatarRepository)
-	mockMinio := new(mocks.MockMinioClient)
+	mockS3 := new(mocks.MockMinioClient)
 	mockKafka := new(mocks.MockKafkaProducer)
 	discardLogger := slog.New(slog.DiscardHandler)
-	h := handler.NewAvatarHandler(mockRepo, mockMinio, mockKafka, discardLogger)
+
+	h := handler.NewAvatarHandler(mockRepo, mockS3, mockKafka, discardLogger, metrics)
 
 	var capturedAvatar *model.Avatar
 
-	mockMinio.On("PutObject", mock.Anything, handler.BucketName, mock.Anything,
+	// Настраиваем ожидания моков
+	mockS3.On("PutObject", mock.Anything, handler.BucketName, mock.Anything,
 		mock.Anything, mock.Anything, mock.Anything).Return(minio.UploadInfo{}, nil)
 
 	// Перехватываем структуру данных для валидации полей БД
@@ -348,7 +462,7 @@ func TestPostUploadAvatarHandler_Success(t *testing.T) {
 	// Генерируем реальное изображение 100x100 в памяти, чтобы пройти image.DecodeConfig
 	img := image.NewRGBA(image.Rect(0, 0, 100, 100))
 	var imgBuffer bytes.Buffer
-	err := png.Encode(&imgBuffer, img)
+	err = png.Encode(&imgBuffer, img)
 	assert.NoError(t, err)
 
 	// Собираем валидный multipart/form-data body вручную
@@ -365,12 +479,12 @@ func TestPostUploadAvatarHandler_Success(t *testing.T) {
 	req.Header.Set("X-User-ID", "user-identity-ok")
 	rr := httptest.NewRecorder()
 
+	// Вызов тестируемого хендлера
 	h.PostUploadAvatarHandler(rr, req)
 
-	// Проверяем HTTP статус успеха
+	// Валидация HTTP-ответа
 	assert.Equal(t, http.StatusCreated, rr.Code)
 
-	// Проверяем тело ответа хэндлера
 	var res handler.AvatarResponse
 	err = json.Unmarshal(rr.Body.Bytes(), &res)
 	assert.NoError(t, err)
@@ -391,10 +505,10 @@ func TestPostUploadAvatarHandler_Success(t *testing.T) {
 	assert.Equal(t, 100, capturedAvatar.Height)
 
 	// При успехе триггеры отката сбрасываются, методы RemoveObject и SoftDelete вызываться НЕ ДОЛЖНЫ.
-	mockMinio.AssertNotCalled(t, "RemoveObject", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
+	mockS3.AssertNotCalled(t, "RemoveObject", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 	mockRepo.AssertNotCalled(t, "SoftDelete", mock.Anything, mock.Anything)
 
-	mockMinio.AssertExpectations(t)
+	mockS3.AssertExpectations(t)
 	mockRepo.AssertExpectations(t)
 	mockKafka.AssertExpectations(t)
 }

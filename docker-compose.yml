@@ -67,13 +67,14 @@ services:
     command: server --console-address ":9001" /data
     restart: unless-stopped
 
-  app:
-    build: .
-    develop:
-      watch:
-        - action: rebuild
-          path: .
-    container_name: gophprofile
+ 
+  app-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: gophprofile-app:latest  
+    container_name: api-server
+    command: ./gophprofile           
     ports:
       - "8080:8080"
     environment:
@@ -104,18 +105,40 @@ services:
         condition: service_started
     restart: unless-stopped
 
+  worker:
+    image: gophprofile-app:latest  
+    container_name: worker
+    command: ./worker           
+    environment:
+      - SERVER_PORT=:8080
+      - DATABASE_URI=postgres://gophprofile_user:secret@postgres/gophprofiledb?sslmode=disable
+      - MINIO_HOST=minio:9000
+      - MINIO_ROOT_USER=gophprofile_user
+      - MINIO_ROOT_PASSWORD=supersecretpassword
+      - MINIO_SSL=false
+      - KAFKA_BROKERS=kafka:9093
+      - MIGRATIONS_PATH=file://migrations
+      - OTEL_SERVICE_NAME=gophprofileservice
+      - OTEL_RESOURCE_ATTRIBUTES=deployment.environment=development
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    restart: always
+    depends_on:
+      - app-server
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.143.0
     container_name: otel-collector
     ports:
       - "4317:4317"
       - "13133:13133"
+      - "8889:8889" # Prometheus exporter metrics
     command:
-      - "--config=/etc/otel-collector-config.yaml"
+      - "--config=/etc/otel-collector-config.yml"
     volumes:
-      - ./otel-collector-config.yaml:/etc/otel-collector-config.yaml:ro
+      - ./otel-collector-config.yml:/etc/otel-collector-config.yml:ro
     healthcheck:
-      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otel-collector-config.yaml"]
+      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otel-collector-config.yml"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -158,14 +181,14 @@ services:
     restart: unless-stopped
 
   loki:
-    image: grafana/loki:3.6.3
+    image: grafana/loki:latest
     container_name: loki
     command:
       - "-config.file=/etc/loki/local-config.yml"
     ports:
       - "3100:3100"
     volumes:
-      - ./loki-config.yaml:/etc/loki/local-config.yml:ro
+      - ./loki-config.yml:/etc/loki/local-config.yml:ro
       - loki-data:/loki
     depends_on:
       otel-collector:
@@ -173,7 +196,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:12.3.1
+    image: grafana/grafana:latest
     container_name: grafana
     ports:
       - "3000:3000"
@@ -182,14 +205,36 @@ services:
       - GF_SECURITY_ADMIN_PASSWORD=admin
       - GF_INSTALL_PLUGINS=grafana-opensearch-datasource
     volumes:
-      - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yml:ro
+      - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
       - grafana-data:/var/lib/grafana
     depends_on:
       opensearch:
         condition: service_healthy
       loki:
         condition: service_started
+      prometheus:
+        condition: service_started
     restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - '9090:9090'
+
+  nodeexporter:
+    image: prom/node-exporter:latest
+    container_name: nodeexporter
+    ports:
+      - '9100:9100' 
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"
+      - "4317"        
 
 volumes:
   kafka_data:
@@ -198,3 +243,4 @@ volumes:
   loki-data:
   grafana-data:
   opensearch-data:
+  

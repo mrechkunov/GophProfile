@@ -4,13 +4,19 @@ import (
 	"context"
 	"log"
 	"log/slog"
+	"os"
 	"time"
 
 	"go.opentelemetry.io/contrib/bridges/otelslog"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploggrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
+	"go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
@@ -18,8 +24,51 @@ import (
 var Log *slog.Logger
 var OtelShutdown func()
 
+func InitMeterProvider(ctx context.Context) func() {
+	// Создаём OTel Exporter gRPC для метрик
+	exporter, err := otlpmetricgrpc.New(ctx)
+
+	if err != nil {
+		log.Fatalf("failed to create OTLP exporter: %v", err)
+	}
+
+	// Добавляем метаинформацию о сервисе
+	res, err := resource.New(ctx,
+		resource.WithFromEnv(),
+		resource.WithProcess(),
+		resource.WithTelemetrySDK(),
+		resource.WithHost(),
+		resource.WithOS(),
+		resource.WithAttributes(
+			semconv.ServiceNameKey.String("gophprofileservoce"),
+			attribute.String("environment", os.Getenv("GO_ENV")),
+		),
+	)
+
+	// Инициализируем MeterProvider
+	meterProvider := metric.NewMeterProvider(
+		metric.WithResource(res),
+		metric.WithReader(
+			metric.NewPeriodicReader(
+				exporter,
+				metric.WithInterval(2*time.Second),
+			),
+		),
+	)
+	otel.SetMeterProvider(meterProvider)
+
+	return func() {
+		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+
+		if err := meterProvider.Shutdown(ctx); err != nil {
+			otel.Handle(err)
+		}
+	}
+}
+
 func InitLoggerProvider(ctx context.Context) (*slog.Logger, func()) {
-	// Создаём gRPC Exporter для логов (порт 4317)
+	// Создаём gRPC Exporter для логов
 	exporter, err := otlploggrpc.New(ctx)
 	if err != nil {
 		log.Fatalf("failed to create OTLP log exporter: %v", err)
@@ -54,7 +103,7 @@ func InitLoggerProvider(ctx context.Context) (*slog.Logger, func()) {
 	logger := slog.New(handler)
 
 	// Устанавливаем как глобальный логгер
-	// slog.SetDefault(logger)
+	slog.SetDefault(logger)
 
 	// Возвращаем функцию для корректного завершения (flush данных перед выходом)
 	shutdown := func() {
@@ -66,4 +115,51 @@ func InitLoggerProvider(ctx context.Context) (*slog.Logger, func()) {
 	}
 
 	return logger, shutdown
+}
+
+// InitTraceProvider настраивает сбор трейсов через gRPC OTLP экспортер
+func InitTraceProvider(ctx context.Context) func() {
+	// 1. Создаем OTel Exporter для трейсов по gRPC
+	exporter, err := otlptracegrpc.New(ctx)
+	if err != nil {
+		log.Fatalf("failed to create OTLP trace exporter: %v", err)
+	}
+
+	// 2. Добавляем метаинформацию о сервисе (абсолютно идентичную InitMeterProvider)
+	res, err := resource.New(ctx,
+		resource.WithFromEnv(),
+		resource.WithProcess(),
+		resource.WithTelemetrySDK(),
+		resource.WithHost(),
+		resource.WithOS(),
+		resource.WithAttributes(
+			semconv.ServiceNameKey.String("gophprofileservice"),
+			attribute.String("environment", os.Getenv("GO_ENV")),
+		),
+	)
+	if err != nil {
+		log.Fatalf("failed to create trace resource: %v", err)
+	}
+
+	// Инициализируем TracerProvider с пакетным процессором (BatchSpanProcessor)
+	bsp := trace.NewBatchSpanProcessor(exporter)
+
+	tracerProvider := trace.NewTracerProvider(
+		trace.WithSampler(trace.AlwaysSample()),
+		trace.WithResource(res),
+		trace.WithSpanProcessor(bsp),
+	)
+
+	// Делаем этот провайдер глобальным для всего Go-приложения
+	otel.SetTracerProvider(tracerProvider)
+
+	// Возвращаем функцию плавного закрытия (Graceful Shutdown)
+	return func() {
+		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+
+		if err := tracerProvider.Shutdown(ctx); err != nil {
+			otel.Handle(err)
+		}
+	}
 }

@@ -4,7 +4,12 @@ import (
 	"gophprofile/internal/repository"
 	"log/slog"
 	"time"
+
+	"go.opentelemetry.io/otel"
 )
+
+// Инициализируем глобальный трейсер для пакета хендлеров
+var tracer = otel.Tracer("gophprofile/handlers")
 
 const MaxFileSize = 10 * 1024 * 1024
 const BucketName = "avatars"
@@ -29,19 +34,21 @@ type SizeErrorResponse struct {
 
 // AvatarHandler объединяет зависимости для работы с аватарами
 type AvatarHandler struct {
-	repo   repository.AvatarRepository
-	s3     repository.MinioClientAPI
-	kafka  repository.KafkaProducerAPI
-	logger *slog.Logger
+	repo    repository.AvatarRepository
+	s3      repository.MinioClientAPI
+	kafka   repository.KafkaProducerAPI
+	logger  *slog.Logger
+	metrics *AvatarMetrics
 }
 
 // NewAvatarHandler — конструктор хэндлера
-func NewAvatarHandler(repo repository.AvatarRepository, s3 repository.MinioClientAPI, kafka repository.KafkaProducerAPI, logger *slog.Logger) *AvatarHandler {
+func NewAvatarHandler(repo repository.AvatarRepository, s3 repository.MinioClientAPI, kafka repository.KafkaProducerAPI, logger *slog.Logger, metrics *AvatarMetrics) *AvatarHandler {
 	return &AvatarHandler{
-		repo:   repo,
-		s3:     s3,
-		kafka:  kafka,
-		logger: logger.With("component", "AvatarHandler"),
+		repo:    repo,
+		s3:      s3,
+		kafka:   kafka,
+		logger:  logger.With("component", "AvatarHandler"),
+		metrics: metrics,
 	}
 }
 
