@@ -93,7 +93,7 @@ func TestDeleteAvatarHandler_Success(t *testing.T) {
 		UUID:   avatarID,
 		UserID: userID,
 		S3Key:  "originals/my-avatar-id.png",
-		Thumbnail_S3_Keys: model.Thumbnails{
+		ThumbnailS3Keys: model.Thumbnails{
 			Small:  "thumbnails/my-avatar-id_100.png",
 			Medium: "thumbnails/my-avatar-id_300.png",
 		},

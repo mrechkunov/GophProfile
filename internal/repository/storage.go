@@ -28,6 +28,8 @@ func NewPostgresAvatarRepository(db *sql.DB) *PostgresAvatarRepository {
 	return &PostgresAvatarRepository{db: db}
 }
 
+var ErrAvatarNotFound = errors.New("Avatar not found")
+
 // Create создает первичную запись со статусом processing
 func (r *PostgresAvatarRepository) Create(ctx context.Context, avatar *model.Avatar) error {
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, 1*time.Second)
@@ -82,12 +84,12 @@ func (r *PostgresAvatarRepository) SoftDelete(ctx context.Context, id string) (*
 		&avatar.UUID,
 		&avatar.UserID,
 		&avatar.S3Key,
-		&avatar.Thumbnail_S3_Keys,
+		&avatar.ThumbnailS3Keys,
 	)
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("avatar not found")
+			return nil, ErrAvatarNotFound
 		}
 		return nil, err
 	}
@@ -113,7 +115,7 @@ func (r *PostgresAvatarRepository) GetByID(ctx context.Context, avatarID string)
 		&avatar.MimeType,
 		&avatar.SizeBytes,
 		&avatar.S3Key,
-		&avatar.Thumbnail_S3_Keys,
+		&avatar.ThumbnailS3Keys,
 		&avatar.UploadStatus,
 		&avatar.ProcessingStatus,
 		&avatar.CreatedAt,
@@ -124,7 +126,7 @@ func (r *PostgresAvatarRepository) GetByID(ctx context.Context, avatarID string)
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("avatar not found")
+			return nil, ErrAvatarNotFound
 		}
 		return nil, err
 	}
@@ -152,7 +154,7 @@ func (r *PostgresAvatarRepository) GetByUserID(ctx context.Context, userID strin
 		&avatar.MimeType,
 		&avatar.SizeBytes,
 		&avatar.S3Key,
-		&avatar.Thumbnail_S3_Keys,
+		&avatar.ThumbnailS3Keys,
 		&avatar.UploadStatus,
 		&avatar.ProcessingStatus,
 		&avatar.CreatedAt,
@@ -163,7 +165,7 @@ func (r *PostgresAvatarRepository) GetByUserID(ctx context.Context, userID strin
 
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("avatar not found")
+			return nil, ErrAvatarNotFound
 		}
 		return nil, err
 	}

@@ -1,11 +1,11 @@
 package handler
 
 import (
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"gophprofile/internal/config"
 	"gophprofile/internal/model"
+	"gophprofile/internal/repository"
 	"net/http"
 	"time"
 
@@ -74,7 +74,7 @@ func (h *AvatarHandler) DeleteAvatarHandler(w http.ResponseWriter, r *http.Reque
 	}()
 
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, repository.ErrAvatarNotFound) {
 			h.metrics.DeleteCounter.Add(ctx, 1, metric.WithAttributes(
 				attribute.String("status", "error"),
 				attribute.String("reason", "avatar_not_found"),
@@ -137,11 +137,11 @@ func (h *AvatarHandler) DeleteAvatarHandler(w http.ResponseWriter, r *http.Reque
 	if deletedAvatar.S3Key != "" {
 		keysToDelete = append(keysToDelete, deletedAvatar.S3Key)
 	}
-	if deletedAvatar.Thumbnail_S3_Keys.Small != "" {
-		keysToDelete = append(keysToDelete, deletedAvatar.Thumbnail_S3_Keys.Small)
+	if deletedAvatar.ThumbnailS3Keys.Small != "" {
+		keysToDelete = append(keysToDelete, deletedAvatar.ThumbnailS3Keys.Small)
 	}
-	if deletedAvatar.Thumbnail_S3_Keys.Medium != "" {
-		keysToDelete = append(keysToDelete, deletedAvatar.Thumbnail_S3_Keys.Medium)
+	if deletedAvatar.ThumbnailS3Keys.Medium != "" {
+		keysToDelete = append(keysToDelete, deletedAvatar.ThumbnailS3Keys.Medium)
 	}
 
 	span.SetAttributes(attribute.Int("deleted.files_count", len(keysToDelete)))

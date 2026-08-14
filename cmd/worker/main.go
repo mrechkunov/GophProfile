@@ -175,8 +175,9 @@ func (w *AvatarDeleteWorker) ProcessDeleteTask(ctx context.Context, payload []by
 // ==========================================
 
 func main() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Настраиваем Graceful Shutdown через контекст
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	config.InitWorker(ctx)
 	//  Инициализируем провайдер логов
 	var otelLogsShutdown func()
@@ -230,10 +231,6 @@ func main() {
 	})
 	defer deleteReader.Close()
 
-	// Настраиваем Graceful Shutdown через контекст
-	ctxSig, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	var wg sync.WaitGroup
 
 	logger.Log.InfoContext(ctx, "Combined Avatar Worker Daemon started successfully!")
@@ -241,6 +238,7 @@ func main() {
 	// Рутина 1: Слушаем задачи на ресайз
 	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		logger.Log.InfoContext(ctx, "Subscribed to topic in kafka", "topic", config.KafkaResizeTopic)
 		for {
 			msg, err := resizeReader.FetchMessage(ctx)
@@ -266,6 +264,7 @@ func main() {
 	// Рутина 2: Слушаем задачи на удаление
 	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		logger.Log.InfoContext(ctx, "Subscribed to topic in kafka", "topic", config.KafkaDeleteTopic)
 		for {
 			msg, err := deleteReader.FetchMessage(ctx)
@@ -289,7 +288,7 @@ func main() {
 	}()
 
 	// Ожидаем завершения горутин при системном сигнале SIGTERM
-	<-ctxSig.Done()
+	<-ctx.Done()
 	logger.Log.InfoContext(ctx, "Stopping worker consumers gracefully")
 	wg.Wait()
 	logger.Log.InfoContext(ctx, "All background processes successfully stopped.")

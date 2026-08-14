@@ -79,9 +79,9 @@ func (h *AvatarHandler) GetAvatarHandler(w http.ResponseWriter, r *http.Request)
 	var objectKey string
 	switch size {
 	case "100x100":
-		objectKey = avatar.Thumbnail_S3_Keys.Small
+		objectKey = avatar.ThumbnailS3Keys.Small
 	case "300x300":
-		objectKey = avatar.Thumbnail_S3_Keys.Medium
+		objectKey = avatar.ThumbnailS3Keys.Medium
 	default:
 		objectKey = avatar.S3Key
 	}
@@ -213,16 +213,16 @@ func (h *AvatarHandler) GetAvatarMetadataHandler(w http.ResponseWriter, r *http.
 	}
 
 	var thumbnails []ThumbnailInfo
-	if avatar.Thumbnail_S3_Keys.Small != "" {
+	if avatar.ThumbnailS3Keys.Small != "" {
 		thumbnails = append(thumbnails, ThumbnailInfo{
 			Size: "100x100",
-			URL:  fmt.Sprintf("/%s/%s", BucketName, avatar.Thumbnail_S3_Keys.Small),
+			URL:  fmt.Sprintf("/%s/%s", BucketName, avatar.ThumbnailS3Keys.Small),
 		})
 	}
-	if avatar.Thumbnail_S3_Keys.Medium != "" {
+	if avatar.ThumbnailS3Keys.Medium != "" {
 		thumbnails = append(thumbnails, ThumbnailInfo{
 			Size: "300x300",
-			URL:  fmt.Sprintf("/%s/%s", BucketName, avatar.Thumbnail_S3_Keys.Medium),
+			URL:  fmt.Sprintf("/%s/%s", BucketName, avatar.ThumbnailS3Keys.Medium),
 		})
 	}
 
@@ -305,9 +305,9 @@ func (h *AvatarHandler) GetUserAvatarHandler(w http.ResponseWriter, r *http.Requ
 	var objectKey string
 	switch size {
 	case "100x100":
-		objectKey = avatar.Thumbnail_S3_Keys.Small
+		objectKey = avatar.ThumbnailS3Keys.Small
 	case "300x300":
-		objectKey = avatar.Thumbnail_S3_Keys.Medium
+		objectKey = avatar.ThumbnailS3Keys.Medium
 	default:
 		objectKey = avatar.S3Key
 	}
@@ -365,7 +365,7 @@ func (h *AvatarHandler) GetUserAvatarHandler(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "max-age=86400")
 	if objInfo.ETag != "" {
-		w.Header().Set("ETag", fmt.Sprintf("%s", strings.Trim(objInfo.ETag, "")))
+		w.Header().Set("ETag", fmt.Sprintf(`"%s"`, strings.Trim(objInfo.ETag, `"`)))
 	}
 	w.WriteHeader(http.StatusOK)
 

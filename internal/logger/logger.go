@@ -40,10 +40,14 @@ func InitMeterProvider(ctx context.Context) func() {
 		resource.WithHost(),
 		resource.WithOS(),
 		resource.WithAttributes(
-			semconv.ServiceNameKey.String("gophprofileservoce"),
+			semconv.ServiceNameKey.String("gophprofileservice"),
+			semconv.ServiceVersionKey.String("1.0.0"),
 			attribute.String("environment", os.Getenv("GO_ENV")),
 		),
 	)
+	if err != nil {
+		log.Fatalf("failed to create meter resource: %v", err)
+	}
 
 	// Инициализируем MeterProvider
 	meterProvider := metric.NewMeterProvider(
@@ -77,14 +81,18 @@ func InitLoggerProvider(ctx context.Context) (*slog.Logger, func()) {
 	// Метаинформация (Resource)
 	res, err := resource.New(ctx,
 		resource.WithFromEnv(),
+		resource.WithProcess(),
 		resource.WithTelemetrySDK(),
+		resource.WithHost(),
+		resource.WithOS(),
 		resource.WithAttributes(
 			semconv.ServiceNameKey.String("gophprofileservice"),
 			semconv.ServiceVersionKey.String("1.0.0"),
+			attribute.String("environment", os.Getenv("GO_ENV")),
 		),
 	)
 	if err != nil {
-		log.Fatalf("failed to create resource: %v", err)
+		log.Fatalf("failed to create logger resource: %v", err)
 	}
 
 	// Инициализируем LoggerProvider
@@ -119,13 +127,13 @@ func InitLoggerProvider(ctx context.Context) (*slog.Logger, func()) {
 
 // InitTraceProvider настраивает сбор трейсов через gRPC OTLP экспортер
 func InitTraceProvider(ctx context.Context) func() {
-	// 1. Создаем OTel Exporter для трейсов по gRPC
+	// Создаем OTel Exporter для трейсов по gRPC
 	exporter, err := otlptracegrpc.New(ctx)
 	if err != nil {
 		log.Fatalf("failed to create OTLP trace exporter: %v", err)
 	}
 
-	// 2. Добавляем метаинформацию о сервисе (абсолютно идентичную InitMeterProvider)
+	// Добавляем метаинформацию о сервисе (абсолютно идентичную InitMeterProvider)
 	res, err := resource.New(ctx,
 		resource.WithFromEnv(),
 		resource.WithProcess(),
@@ -134,6 +142,7 @@ func InitTraceProvider(ctx context.Context) func() {
 		resource.WithOS(),
 		resource.WithAttributes(
 			semconv.ServiceNameKey.String("gophprofileservice"),
+			semconv.ServiceVersionKey.String("1.0.0"),
 			attribute.String("environment", os.Getenv("GO_ENV")),
 		),
 	)

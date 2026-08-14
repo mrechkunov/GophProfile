@@ -69,6 +69,7 @@ func NewDBConnect(ctx context.Context, connString string) (*sql.DB, error) {
 	db, err := sql.Open("pgx", connString)
 	if err != nil {
 		logger.Log.ErrorContext(ctx, err.Error())
+		return nil, err
 	}
 	return db, nil
 }

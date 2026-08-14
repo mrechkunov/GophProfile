@@ -39,7 +39,7 @@ func TestGetAvatarHandler_SizeNotProcessedYet(t *testing.T) {
 		UserID:   "user-2",
 		MimeType: "image/jpeg",
 		S3Key:    "originals/avatar-not-ready.jpg",
-		Thumbnail_S3_Keys: model.Thumbnails{
+		ThumbnailS3Keys: model.Thumbnails{
 			Small:  "thumbnails/avatar-not-ready_100.jpg",
 			Medium: "", // Воркер асинхронного ресайза еще не обновил это поле
 		},
