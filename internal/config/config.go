@@ -211,7 +211,7 @@ func InitWorker(ctx context.Context) {
 	// create connect to DB
 	ConnWorker.DB, err = NewDBConnect(ctx, CfgWorker.DBConnStr)
 	if err != nil {
-		logger.Log.ErrorContext(context.Background(), "error while connecting to DB (configure service)")
+		logger.Log.ErrorContext(ctx, "error while connecting to DB (configure service)")
 		return
 	}
 	// MinIO конфигурируем

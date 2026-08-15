@@ -21,24 +21,7 @@ func (h *AvatarHandler) IndexHandler(w http.ResponseWriter, r *http.Request) {
 	span.SetAttributes(attribute.String("file.path", staticFilePath))
 
 	// Отдаем статический файл
-	// Оборачиваем в под-спан для замера скорости работы дисковой подсистемы
-	err := func() error {
-		_, diskSpan := tracer.Start(ctx, "OS:ServeStaticFile", trace.WithSpanKind(trace.SpanKindClient))
-		defer diskSpan.End()
-
-		http.ServeFile(w, r, staticFilePath)
-		return nil
-	}()
-
-	if err != nil {
-		// На случай форс-мажора (хоть ServeFile сам пишет заголовки, зафиксируем сбой в телеметрии)
-		h.metrics.IndexViewsCounter.Add(ctx, 1, metric.WithAttributes(
-			attribute.String("status", "error"),
-		))
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "failed to serve index.html")
-		return
-	}
+	http.ServeFile(w, r, staticFilePath)
 
 	// Записываем успешную метрику
 	h.metrics.IndexViewsCounter.Add(ctx, 1, metric.WithAttributes(

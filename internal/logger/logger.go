@@ -22,17 +22,8 @@ import (
 
 // глобальный логгер server
 var Log *slog.Logger
-var OtelShutdown func()
 
-func InitMeterProvider(ctx context.Context) func() {
-	// Создаём OTel Exporter gRPC для метрик
-	exporter, err := otlpmetricgrpc.New(ctx)
-
-	if err != nil {
-		log.Fatalf("failed to create OTLP exporter: %v", err)
-	}
-
-	// Добавляем метаинформацию о сервисе
+func newOtelResource(ctx context.Context) (*resource.Resource, error) {
 	res, err := resource.New(ctx,
 		resource.WithFromEnv(),
 		resource.WithProcess(),
@@ -45,6 +36,19 @@ func InitMeterProvider(ctx context.Context) func() {
 			attribute.String("environment", os.Getenv("GO_ENV")),
 		),
 	)
+	return res, err
+}
+
+func InitMeterProvider(ctx context.Context) func() {
+	// Создаём OTel Exporter gRPC для метрик
+	exporter, err := otlpmetricgrpc.New(ctx)
+
+	if err != nil {
+		log.Fatalf("failed to create OTLP exporter: %v", err)
+	}
+
+	// Добавляем метаинформацию о сервисе
+	res, err := newOtelResource(ctx)
 	if err != nil {
 		log.Fatalf("failed to create meter resource: %v", err)
 	}
@@ -79,18 +83,7 @@ func InitLoggerProvider(ctx context.Context) (*slog.Logger, func()) {
 	}
 
 	// Метаинформация (Resource)
-	res, err := resource.New(ctx,
-		resource.WithFromEnv(),
-		resource.WithProcess(),
-		resource.WithTelemetrySDK(),
-		resource.WithHost(),
-		resource.WithOS(),
-		resource.WithAttributes(
-			semconv.ServiceNameKey.String("gophprofileservice"),
-			semconv.ServiceVersionKey.String("1.0.0"),
-			attribute.String("environment", os.Getenv("GO_ENV")),
-		),
-	)
+	res, err := newOtelResource(ctx)
 	if err != nil {
 		log.Fatalf("failed to create logger resource: %v", err)
 	}
@@ -134,18 +127,7 @@ func InitTraceProvider(ctx context.Context) func() {
 	}
 
 	// Добавляем метаинформацию о сервисе (абсолютно идентичную InitMeterProvider)
-	res, err := resource.New(ctx,
-		resource.WithFromEnv(),
-		resource.WithProcess(),
-		resource.WithTelemetrySDK(),
-		resource.WithHost(),
-		resource.WithOS(),
-		resource.WithAttributes(
-			semconv.ServiceNameKey.String("gophprofileservice"),
-			semconv.ServiceVersionKey.String("1.0.0"),
-			attribute.String("environment", os.Getenv("GO_ENV")),
-		),
-	)
+	res, err := newOtelResource(ctx)
 	if err != nil {
 		log.Fatalf("failed to create trace resource: %v", err)
 	}

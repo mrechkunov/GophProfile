@@ -264,7 +264,7 @@ func (h *AvatarHandler) PostUploadAvatarHandler(w http.ResponseWriter, r *http.R
 		))
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(ErrorResponse{Error: "Failed to save avatar metadata"})
-		h.logger.WarnContext(ctx, "error while write new avatar in db", "err", err)
+		h.logger.ErrorContext(ctx, "error while write new avatar in db", "err", err)
 		return
 	}
 	dbCreated = true

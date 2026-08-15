@@ -1,6 +1,6 @@
 services:
   kafka:
-    image: confluentinc/cp-kafka:latest
+    image: confluentinc/cp-kafka:8.0.7
     container_name: kafka
     ports:
       - "9092:9092"
@@ -48,7 +48,7 @@ services:
       - pg_data:/var/lib/postgresql/data
 
   minio:
-    image: quay.io/minio/minio:latest
+    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: minio
     ports:
       - "9000:9000"
@@ -72,7 +72,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: gophprofile-app:latest  
+    image: gophprofile-app:12.0.1  
     container_name: api-server
     command: ./gophprofile           
     ports:
@@ -106,7 +106,7 @@ services:
     restart: unless-stopped
 
   worker:
-    image: gophprofile-app:latest  
+    image: gophprofile-app:12.0.1  
     container_name: worker
     command: ./worker           
     environment:
@@ -181,7 +181,7 @@ services:
     restart: unless-stopped
 
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:main-0fd55b9
     container_name: loki
     command:
       - "-config.file=/etc/loki/local-config.yml"
@@ -196,7 +196,7 @@ services:
     restart: unless-stopped
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.1
     container_name: grafana
     ports:
       - "3000:3000"
@@ -217,7 +217,7 @@ services:
     restart: unless-stopped
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.13.2
     container_name: prometheus
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml
@@ -225,13 +225,13 @@ services:
       - '9090:9090'
 
   nodeexporter:
-    image: prom/node-exporter:latest
+    image: prom/node-exporter:v1.12.1
     container_name: nodeexporter
     ports:
       - '9100:9100' 
 
   jaeger:
-    image: jaegertracing/all-in-one:latest
+    image: jaegertracing/all-in-one:1.76.0
     container_name: jaeger
     ports:
       - "16686:16686"

@@ -153,7 +153,7 @@ func (h *AvatarHandler) GetAvatarHandler(w http.ResponseWriter, r *http.Request)
 	// Вложенный Спан: Стриминг байт клиенту
 	var written int64
 	err = func() error {
-		_, ioSpan := tracer.Start(ctx, "HTTP:StreamBytesToClient", trace.WithSpanKind(trace.SpanKindClient))
+		_, ioSpan := tracer.Start(ctx, "HTTP:StreamBytesToClient", trace.WithSpanKind(trace.SpanKindInternal))
 		defer ioSpan.End()
 
 		var ioErr error
@@ -372,7 +372,7 @@ func (h *AvatarHandler) GetUserAvatarHandler(w http.ResponseWriter, r *http.Requ
 	// Вложенный Спан: Копирование потока данных в HTTP ответ
 	var written int64
 	err = func() error {
-		_, ioSpan := tracer.Start(ctx, "HTTP:StreamBytesToClient", trace.WithSpanKind(trace.SpanKindClient))
+		_, ioSpan := tracer.Start(ctx, "HTTP:StreamBytesToClient", trace.WithSpanKind(trace.SpanKindInternal))
 		defer ioSpan.End()
 		var ioErr error
 		written, ioErr = io.Copy(w, object)

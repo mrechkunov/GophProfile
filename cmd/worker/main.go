@@ -33,10 +33,6 @@ const (
 	BucketName         = "avatars"
 )
 
-// // локальный логгер
-// var log *slog.Logger
-// var otelShutdown func()
-
 func init() {
 	// Регистрируем WebP декодер для ресайза
 	image.RegisterFormat("webp", "RIFF????WEBP", webp.Decode, webp.DecodeConfig)
@@ -178,7 +174,7 @@ func main() {
 	// Настраиваем Graceful Shutdown через контекст
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	config.InitWorker(ctx)
+
 	//  Инициализируем провайдер логов
 	var otelLogsShutdown func()
 	logger.Log, otelLogsShutdown = logger.InitLoggerProvider(ctx)
@@ -203,6 +199,9 @@ func main() {
 			otelMetricsShutdown()
 		}
 	}()
+
+	//  Инициализируем конфигурацию воркера
+	config.InitWorker(ctx)
 
 	// Инициализируем общие для обоих процессов зависимости (БД на pgx/v5 и MinIO)
 	repo := repository.NewPostgresAvatarRepository(config.ConnWorker.DB)
