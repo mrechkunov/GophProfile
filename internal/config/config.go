@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
 	"gophprofile/internal/logger"
 	"os"
 
@@ -16,6 +17,9 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/segmentio/kafka-go"
 )
+
+const KafkaResizeTopic = "avatar-resize-tasks"
+const KafkaDeleteTopic = "avatar-delete-tasks"
 
 // Config содержит параметры подключения из env
 type Config struct {
@@ -61,84 +65,82 @@ func LoadConfig() Config {
 	}
 }
 
-func NewDBConnect(connString string) (*sql.DB, error) {
+func NewDBConnect(ctx context.Context, connString string) (*sql.DB, error) {
 	db, err := sql.Open("pgx", connString)
 	if err != nil {
-		logger.Log.Errorln(err)
+		logger.Log.ErrorContext(ctx, err.Error())
+		return nil, err
 	}
 	return db, nil
 }
 
-func configureDB(cfg Config) (*sql.DB, error) {
+func configureDB(ctx context.Context, cfg Config) (*sql.DB, error) {
 	// create connect to DB and run Up all migrations
-	dbConn, err := NewDBConnect(cfg.DBConnStr)
+	dbConn, err := NewDBConnect(ctx, cfg.DBConnStr)
 	if err != nil {
-		logger.Log.Errorln("error while connecting to DB (configure service)", err)
+		logger.Log.ErrorContext(ctx, "error while connecting to DB (configure service)", "err", err)
 		return nil, err
 	}
-	migrations(dbConn, &cfg)
+	migrations(ctx, dbConn, &cfg)
 	return dbConn, nil
 }
 
-func migrations(dbConn *sql.DB, cfg *Config) {
+func migrations(ctx context.Context, dbConn *sql.DB, cfg *Config) {
 	m, err := migrate.New(
 		cfg.MigrationsPath,
 		cfg.DBConnStr)
 	if err != nil {
-		logger.Log.Errorln("error initializing migrate:", err)
+		logger.Log.ErrorContext(ctx, "error initializing migrate:", "err", err)
 	}
 	// Apply all available migrations
 	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
-		logger.Log.Errorln("error applying migrations:", err)
+		logger.Log.ErrorContext(ctx, "error applying migrations:", "err", err)
 	}
-	logger.Log.Infoln("database migrations applied successfully!")
+	logger.Log.InfoContext(ctx, "database migrations applied successfully!")
 	err = dbConn.Ping()
 	if err != nil {
-		logger.Log.Warnln("error while ping DB after migratioans applied", err)
+		logger.Log.ErrorContext(ctx, "error while ping DB after migratioans applied", "err", err)
 	}
 }
 
-func configureMinIO(cfg Config) (*minio.Client, error) {
+func configureMinIO(ctx context.Context, cfg Config) (*minio.Client, error) {
 	// MinIO конфигурируем
 	minioClient, err := minio.New(cfg.MinioHost, &minio.Options{
 		Creds:  credentials.NewStaticV4(cfg.MinioUser, cfg.MinioPass, ""),
 		Secure: cfg.MinioSSL,
 	})
 	if err != nil {
-		logger.Log.Errorln("error while minio client creating:", err)
+		logger.Log.ErrorContext(ctx, "error while minio client creating:", "err", err)
 		return nil, err
 	}
 	// Создание бакета
-	ctx := context.Background()
 	bucketName := "avatars"
 	// Проверяем, существует ли уже бакет
 	exists, err := minioClient.BucketExists(ctx, bucketName)
 	if err != nil {
-		logger.Log.Errorln("error while bucket test:", err)
+		logger.Log.ErrorContext(ctx, "error while bucket test:", "err", err)
 		return nil, err
 	}
 
 	if !exists {
 		err = minioClient.MakeBucket(ctx, bucketName, minio.MakeBucketOptions{})
 		if err != nil {
-			logger.Log.Errorln("error while bucket creating:", err)
+			logger.Log.ErrorContext(ctx, "error while bucket creating:", "err", err)
 			return nil, err
 		}
-		logger.Log.Infoln("bucket", bucketName, "is created sucsessfully!")
+		logger.Log.InfoContext(ctx, "bucket is created sucsessfully!", "bucketName", bucketName)
 	} else {
-		logger.Log.Infoln("bucket", bucketName, "is already exist.")
+		logger.Log.InfoContext(ctx, "bucket is already exist.", "bucketName", bucketName)
 	}
 	return minioClient, nil
 }
-func configureKafka(cfg Config) (*kafka.Writer, error) {
-	ctx := context.Background()
+func configureKafka(ctx context.Context, cfg Config) (*kafka.Writer, error) {
 	brokerAddress := cfg.KafkaBrokers
-	topicName := "avatar-resize-tasks"
 
 	// Подключаемся к любому брокеру, чтобы найти контроллер
 	conn, err := kafka.DialContext(ctx, "tcp", brokerAddress)
 	if err != nil {
-		logger.Log.Errorln(err.Error())
+		logger.Log.ErrorContext(ctx, err.Error())
 		return nil, err
 	}
 	defer conn.Close()
@@ -146,13 +148,13 @@ func configureKafka(cfg Config) (*kafka.Writer, error) {
 	// Получаем адрес текущего контроллера для выполнения операций администрирования
 	controller, err := conn.Controller()
 	if err != nil {
-		logger.Log.Errorln(err.Error())
+		logger.Log.ErrorContext(ctx, err.Error())
 		return nil, err
 	}
 
 	controllerConn, err := kafka.DialContext(ctx, "tcp", fmt.Sprintf("%s:%d", controller.Host, controller.Port))
 	if err != nil {
-		logger.Log.Errorln(err.Error())
+		logger.Log.ErrorContext(ctx, err.Error())
 		return nil, err
 	}
 	defer controllerConn.Close()
@@ -160,51 +162,56 @@ func configureKafka(cfg Config) (*kafka.Writer, error) {
 	// Создаем конфигурацию топика
 	topicConfigs := []kafka.TopicConfig{
 		{
-			Topic:             topicName,
+			Topic:             KafkaResizeTopic,
 			NumPartitions:     3,
-			ReplicationFactor: 1, // Для локального dev-кластера (в prod обычно >= 3)
+			ReplicationFactor: 1,
+		},
+		{
+			Topic:             KafkaDeleteTopic,
+			NumPartitions:     3,
+			ReplicationFactor: 1,
 		},
 	}
 	// Отправляем запрос на создание
 	err = controllerConn.CreateTopics(topicConfigs...)
 	if err != nil {
-		logger.Log.Errorln(err.Error())
+		logger.Log.ErrorContext(ctx, err.Error())
 		return nil, err
 	}
-	logger.Log.Infoln("Topic", topicName, "is created sucsessfuly!")
+	logger.Log.InfoContext(ctx, "Topics are created sucsessfuly!", "resize name", KafkaResizeTopic, "delete name", KafkaDeleteTopic)
 
 	// Настройка продюсера (Writer)
 	writer := &kafka.Writer{
-		Addr:     kafka.TCP(cfg.KafkaBrokers), // Адрес вашего Kafka-брокера
+		Addr:     kafka.TCP(cfg.KafkaBrokers), // Адрес Kafka-брокера
 		Balancer: &kafka.LeastBytes{},         // Алгоритм распределения по партициям
 	}
 	return writer, nil
 }
 
-func InitServer() {
+func InitServer(ctx context.Context) {
 	CfgServer = LoadConfig()
 	var err error
 	// DB конфигурируем
-	ConnServer.DB, err = configureDB(CfgServer)
+	ConnServer.DB, err = configureDB(ctx, CfgServer)
 	if err != nil {
-		logger.Log.Errorln("error while db configure", err)
+		logger.Log.ErrorContext(ctx, "error while db configure", "err", err)
 	}
-	ConnServer.MinioClient, err = configureMinIO(CfgServer)
+	ConnServer.MinioClient, err = configureMinIO(ctx, CfgServer)
 	if err != nil {
-		logger.Log.Errorln("error while minIO configure", err)
+		logger.Log.ErrorContext(ctx, "error while minIO configure", "err", err)
 	}
-	ConnServer.KafkaProducer, err = configureKafka(CfgServer)
+	ConnServer.KafkaProducer, err = configureKafka(ctx, CfgServer)
 	if err != nil {
-		logger.Log.Errorln("error while kafka configure", err)
+		logger.Log.ErrorContext(ctx, "error while kafka configure", "err", err)
 	}
 }
-func InitWorker() {
+func InitWorker(ctx context.Context) {
 	CfgWorker = LoadConfig()
 	var err error
 	// create connect to DB
-	ConnWorker.DB, err = NewDBConnect(CfgWorker.DBConnStr)
+	ConnWorker.DB, err = NewDBConnect(ctx, CfgWorker.DBConnStr)
 	if err != nil {
-		logger.Log.Errorln("error while connecting to DB (configure service)", err)
+		logger.Log.ErrorContext(ctx, "error while connecting to DB (configure service)")
 		return
 	}
 	// MinIO конфигурируем
@@ -213,10 +220,10 @@ func InitWorker() {
 		Secure: CfgWorker.MinioSSL,
 	})
 	if err != nil {
-		logger.Log.Errorln("error while minio client creating:", err)
+		logger.Log.ErrorContext(ctx, "error while minio client creating:", "err", err)
 		return
 	}
-	// Настройка продюсера
+	// Настройка продюсера kafka
 	ConnWorker.KafkaProducer = &kafka.Writer{
 		Addr:     kafka.TCP(CfgWorker.KafkaBrokers),
 		Balancer: &kafka.LeastBytes{},

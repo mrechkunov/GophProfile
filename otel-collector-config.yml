@@ -1,0 +1,71 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+processors:
+  batch:
+    timeout: 10s
+    send_batch_size: 1024
+
+  resource/add-job:
+    attributes:
+      - key: job
+        from_attribute: service.name
+        action: upsert
+
+exporters:
+  prometheus:
+    endpoint: '0.0.0.0:8889' # Collector отдаёт метрики здесь
+    namespace: "gophprofile"
+
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
+    compression: "gzip"
+    tls:
+      insecure: true
+
+  opensearch/logs:
+    http:
+      endpoint: http://opensearch:9200
+    # Logs configuration
+    logs_index: "otel-logs-%{service.name}"
+    logs_index_fallback: "default"
+    logs_index_time_format: "yyyy.MM.dd"
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 10m
+    sending_queue:
+      enabled: true
+      num_consumers: 1
+      queue_size: 10
+
+  otlp/jaeger:
+    endpoint: "jaeger:4317"
+    tls:
+      insecure: true
+
+service:
+  extensions: [health_check]
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors:
+        - resource/add-job
+        - batch
+      exporters: [otlphttp/loki, opensearch/logs]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus] 
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/jaeger]

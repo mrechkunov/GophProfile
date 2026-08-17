@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
-	"image/jpeg" // Используется для jpeg.Encode
-	"image/png"  // Используется для png.Encode
+	"image/jpeg"
+	"image/png"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strings"
+	"sync"
 	"syscall"
 
 	"gophprofile/internal/config"
@@ -23,70 +24,46 @@ import (
 	"github.com/disintegration/gift"
 	"github.com/minio/minio-go/v7"
 	"github.com/segmentio/kafka-go"
-	"golang.org/x/image/webp" // Поддержка декодирования WebP
+	"golang.org/x/image/webp"
 )
 
 const (
-	KafkaGroupID = "avatar-resize-worker-group"
-	KafkaTopic   = "avatar-resize-tasks"
-	BucketName   = "avatars"
+	KafkaResizeGroupID = "avatar-resize-worker-group"
+	KafkaDeleteGroupID = "avatar-delete-cleaner-group"
+	BucketName         = "avatars"
 )
 
 func init() {
-	// Регистрируем WebP декодер, так как в стандартной библиотеке его нет
+	// Регистрируем WebP декодер для ресайза
 	image.RegisterFormat("webp", "RIFF????WEBP", webp.Decode, webp.DecodeConfig)
 }
 
-func main() {
-	config.InitWorker()
-	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  []string{config.CfgWorker.KafkaBrokers},
-		Topic:    KafkaTopic,
-		GroupID:  KafkaGroupID,
-		MinBytes: 10e3,
-		MaxBytes: 10e6,
-	})
-	defer reader.Close()
+// ==========================================
+// 1. ВОРКЕР РЕСАЙЗА
+// ==========================================
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	logger.Log.Infoln("Avatar resize worker started...")
-
-	for {
-		msg, err := reader.FetchMessage(ctx)
-		if err != nil {
-			if ctx.Err() != nil {
-				break
-			}
-			fmt.Println("kafka adress:", config.CfgWorker.KafkaBrokers)
-			logger.Log.Errorln("Error while fetching message from Kafka:", err)
-			continue
-		}
-
-		if err := processResizeTask(ctx, msg.Value); err != nil {
-			logger.Log.Errorf("Failed to process task for key %s: %v", string(msg.Key), err)
-			continue
-		}
-
-		if err := reader.CommitMessages(ctx, msg); err != nil {
-			logger.Log.Errorln("Failed to commit message in Kafka:", err)
-		}
-	}
-
-	logger.Log.Infoln("Worker gracefully stopped.")
+type ResizeProcessor struct {
+	s3     repository.MinioClientAPI
+	repo   repository.AvatarRepository
+	logger *slog.Logger
 }
 
-func processResizeTask(ctx context.Context, data []byte) error {
+func NewResizeProcessor(s3 repository.MinioClientAPI, repo repository.AvatarRepository, log *slog.Logger) *ResizeProcessor {
+	return &ResizeProcessor{
+		s3:     s3,
+		repo:   repo,
+		logger: log}
+}
+
+func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) error {
 	var task model.AvatarResizeTask
 	if err := json.Unmarshal(data, &task); err != nil {
 		return fmt.Errorf("failed to unmarshal JSON task: %w", err)
 	}
 
-	logger.Log.Infof("Processing resize for AvatarID: %s", task.AvatarID)
+	p.logger.InfoContext(ctx, "Processing resize for Avatar", "AvatarID", task.AvatarID)
 
-	// Скачиваем оригинальный файл из MinIO
-	object, err := config.ConnWorker.MinioClient.GetObject(ctx, task.BucketName, task.ObjectKey, minio.GetObjectOptions{})
+	object, err := p.s3.GetObject(ctx, task.BucketName, task.ObjectKey, minio.GetObjectOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to get object from minio: %w", err)
 	}
@@ -97,8 +74,7 @@ func processResizeTask(ctx context.Context, data []byte) error {
 		return fmt.Errorf("failed to read object data: %w", err)
 	}
 
-	// Декодируем байты в картинку
-	srcImg, imgType, err := image.Decode(strings.NewReader(string(imgData)))
+	srcImg, imgType, err := image.Decode(bytes.NewReader(imgData))
 	if err != nil {
 		return fmt.Errorf("failed to decode image format: %w", err)
 	}
@@ -106,36 +82,28 @@ func processResizeTask(ctx context.Context, data []byte) error {
 	thumbnailsMap := make(map[string]string)
 	ext := filepath.Ext(task.ObjectKey)
 
-	// Перебираем размеры (100 и 300)
 	for _, size := range task.Sizes {
-		// Делаем ресайз через GIFT
 		g := gift.New(gift.Resize(size, 0, gift.LanczosResampling))
-
-		// Создаем пустой холст нужного размера под результат
 		resizedImg := image.NewRGBA(g.Bounds(srcImg.Bounds()))
 		g.Draw(resizedImg, srcImg)
 
-		// Безопасное кодирование в буфер памяти (выделяет мало памяти, так как аватарки крошечные)
 		buf := new(bytes.Buffer)
 		var encodeErr error
 
-		// кодируем через пакеты jpeg и png напрямую
 		switch imgType {
 		case "png":
 			encodeErr = png.Encode(buf, resizedImg)
-		default: // jpeg / jpg / webp
-			encodeErr = jpeg.Encode(buf, resizedImg, &jpeg.Options{Quality: 85}) // Задаем оптимальное качество
+		default:
+			encodeErr = jpeg.Encode(buf, resizedImg, &jpeg.Options{Quality: 85})
 		}
 
 		if encodeErr != nil {
 			return fmt.Errorf("failed to encode image size %d: %w", size, encodeErr)
 		}
 
-		// Новый ключ для уменьшенной копии в папку "minimals"
 		thumbKey := fmt.Sprintf("minimals/%s_%d%s", task.AvatarID, size, ext)
 
-		// Загружаем миниатюру в MinIO, передавая точный размер буфера `int64(buf.Len())`
-		_, err = config.ConnWorker.MinioClient.PutObject(ctx, BucketName, thumbKey, buf, int64(buf.Len()), minio.PutObjectOptions{
+		_, err = p.s3.PutObject(ctx, BucketName, thumbKey, buf, int64(buf.Len()), minio.PutObjectOptions{
 			ContentType: "image/" + imgType,
 		})
 		if err != nil {
@@ -145,18 +113,182 @@ func processResizeTask(ctx context.Context, data []byte) error {
 		thumbnailsMap[fmt.Sprintf("%d", size)] = fmt.Sprintf("/%s/%s", BucketName, thumbKey)
 	}
 
-	// Маршалим мапу для записи в JSONB поле базы данных
 	thumbnailsJSON, err := json.Marshal(thumbnailsMap)
 	if err != nil {
 		return fmt.Errorf("failed to marshal thumbnails map: %w", err)
 	}
-	// Обновляем строку в PostgreSQL
-	storage := repository.NewPostgresAvatarRepository(config.ConnWorker.DB)
-	err = storage.UpdateStatus(ctx, task.AvatarID, "success", thumbnailsJSON)
+
+	err = p.repo.UpdateStatus(ctx, task.AvatarID, "success", thumbnailsJSON)
 	if err != nil {
 		return fmt.Errorf("failed to update avatar row in database: %w", err)
 	}
 
-	logger.Log.Infof("Successfully processed and saved thumbnails for AvatarID: %s", task.AvatarID)
+	p.logger.InfoContext(ctx, "Successfully processed and saved thumbnails for Avatar", "AvatarID", task.AvatarID)
 	return nil
+}
+
+// ==========================================
+// 2. ВОРКЕР УДАЛЕНИЯ (CLEANER)
+// ==========================================
+
+type AvatarDeleteWorker struct {
+	s3     repository.MinioClientAPI
+	logger *slog.Logger
+}
+
+func NewAvatarDeleteWorker(s3 repository.MinioClientAPI, log *slog.Logger) *AvatarDeleteWorker {
+	return &AvatarDeleteWorker{
+		s3:     s3,
+		logger: log,
+	}
+}
+
+func (w *AvatarDeleteWorker) ProcessDeleteTask(ctx context.Context, payload []byte) error {
+	var task model.AvatarDeleteTask
+	if err := json.Unmarshal(payload, &task); err != nil {
+		return fmt.Errorf("failed to unmarshal delete task: %w", err)
+	}
+
+	w.logger.InfoContext(ctx, "Worker starting physical cleanup for ", "AvatarID:", task.AvatarID, "Total files:", len(task.S3Keys))
+
+	for _, key := range task.S3Keys {
+		if key == "" {
+			continue
+		}
+		err := w.s3.RemoveObject(ctx, BucketName, key, minio.RemoveObjectOptions{})
+		if err != nil {
+			w.logger.ErrorContext(ctx, "Worker failed to physically remove object from MinIO:", "object key", key, "err", err)
+			continue
+		}
+		w.logger.InfoContext(ctx, "Physically removed object from S3:", "object key", key)
+	}
+
+	return nil
+}
+
+// ==========================================
+// 3. ОСНОВНОЙ ПУЛ ДЛЯ ОДНОВРЕМЕННОГО ЗАПУСКА
+// ==========================================
+
+func main() {
+	// Настраиваем Graceful Shutdown через контекст
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	//  Инициализируем провайдер логов
+	var otelLogsShutdown func()
+	logger.Log, otelLogsShutdown = logger.InitLoggerProvider(ctx)
+	defer func() {
+		if otelLogsShutdown != nil {
+			otelLogsShutdown()
+		}
+	}()
+
+	//  Инициализируем провайдер трейсинга
+	otelTracesShutdown := logger.InitTraceProvider(ctx)
+	defer func() {
+		if otelTracesShutdown != nil {
+			otelTracesShutdown()
+		}
+	}()
+
+	//  Инициализируем провайдер метрик
+	otelMetricsShutdown := logger.InitMeterProvider(ctx)
+	defer func() {
+		if otelMetricsShutdown != nil {
+			otelMetricsShutdown()
+		}
+	}()
+
+	//  Инициализируем конфигурацию воркера
+	config.InitWorker(ctx)
+
+	// Инициализируем общие для обоих процессов зависимости (БД на pgx/v5 и MinIO)
+	repo := repository.NewPostgresAvatarRepository(config.ConnWorker.DB)
+	s3Client := config.ConnWorker.MinioClient
+
+	// Создаем экземпляры наших процессоров логики
+	resizeProcessor := NewResizeProcessor(s3Client, repo, logger.Log)
+	deleteWorker := NewAvatarDeleteWorker(s3Client, logger.Log)
+
+	// Настраиваем Kafka ридеров для каждого топика
+	resizeReader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:  []string{config.CfgWorker.KafkaBrokers},
+		Topic:    config.KafkaResizeTopic,
+		GroupID:  KafkaResizeGroupID,
+		MinBytes: 10e3,
+		MaxBytes: 10e6,
+	})
+	defer resizeReader.Close()
+
+	deleteReader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:  []string{config.CfgWorker.KafkaBrokers},
+		Topic:    config.KafkaDeleteTopic,
+		GroupID:  KafkaDeleteGroupID,
+		MinBytes: 10e3,
+		MaxBytes: 10e6,
+	})
+	defer deleteReader.Close()
+
+	var wg sync.WaitGroup
+
+	logger.Log.InfoContext(ctx, "Combined Avatar Worker Daemon started successfully!")
+
+	// Рутина 1: Слушаем задачи на ресайз
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		logger.Log.InfoContext(ctx, "Subscribed to topic in kafka", "topic", config.KafkaResizeTopic)
+		for {
+			msg, err := resizeReader.FetchMessage(ctx)
+			if err != nil {
+				if ctx.Err() != nil {
+					break
+				}
+				logger.Log.ErrorContext(ctx, "Error fetching resize message:", "err", err)
+				continue
+			}
+
+			if err := resizeProcessor.ProcessResizeTask(ctx, msg.Value); err != nil {
+				logger.Log.ErrorContext(ctx, "Failed to resize avatar for key:", "key", string(msg.Key), "err", err)
+				continue
+			}
+
+			if err := resizeReader.CommitMessages(ctx, msg); err != nil {
+				logger.Log.ErrorContext(ctx, "Failed to commit resize message:", "err", err)
+			}
+		}
+	}()
+
+	// Рутина 2: Слушаем задачи на удаление
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		logger.Log.InfoContext(ctx, "Subscribed to topic in kafka", "topic", config.KafkaDeleteTopic)
+		for {
+			msg, err := deleteReader.FetchMessage(ctx)
+			if err != nil {
+				if ctx.Err() != nil {
+					break
+				}
+				logger.Log.ErrorContext(ctx, "Error fetching delete message:", "err", err)
+				continue
+			}
+
+			if err := deleteWorker.ProcessDeleteTask(ctx, msg.Value); err != nil {
+				logger.Log.ErrorContext(ctx, "Failed to clear S3 layout for key:", "key", string(msg.Key), "err", err)
+				continue
+			}
+
+			if err := deleteReader.CommitMessages(ctx, msg); err != nil {
+				logger.Log.ErrorContext(ctx, "Failed to commit delete message:", "err", err)
+			}
+		}
+	}()
+
+	// Ожидаем завершения горутин при системном сигнале SIGTERM
+	<-ctx.Done()
+	logger.Log.InfoContext(ctx, "Stopping worker consumers gracefully")
+	wg.Wait()
+	logger.Log.InfoContext(ctx, "All background processes successfully stopped.")
 }

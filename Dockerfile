@@ -29,5 +29,3 @@ COPY --from=builder /app/worker .
 # Указываем порт, который слушает приложение
 EXPOSE 8080
 
-# Запуск приложения
-CMD ["sh", "-c", "./gophprofile & ./worker"]
