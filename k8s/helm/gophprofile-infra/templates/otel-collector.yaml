@@ -42,7 +42,7 @@ data:
       pipelines:
         logs:
           receivers: [otlp]
-          processors: [- resource/add-job, batch]
+          processors: [resource/add-job, batch]
           exporters: [otlphttp/loki]
         metrics:
           receivers: [otlp]
