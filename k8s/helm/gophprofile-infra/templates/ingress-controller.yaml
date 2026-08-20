@@ -18,11 +18,11 @@ spec:
       labels:
         app.kubernetes.io/component: controller
     spec:
-      hostNetwork: true # Позволит контроллеру слушать порты 80/443 прямо на вашем сервере devsrv
+      hostNetwork: true
       containers:
       - name: controller
-        # Используем альтернативный стабильный образ, который часто кэшируется или доступен без вебхуков
-        image: mirror.gcr.io/google-containers/nginx-ingress-controller:v1.11.1
+        
+        image: mirror.gcr.io/ingress-nginx/controller:v1.11.1
         args:
         - /nginx-ingress-controller
         - --election-id=ingress-nginx-leader
