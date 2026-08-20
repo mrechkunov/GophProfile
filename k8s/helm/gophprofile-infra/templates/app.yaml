@@ -107,14 +107,31 @@ spec:
         {{- include "gophprofile-infra.selectorLabels" . | nindent 8 }}
         component: worker
     spec:
-      initContainers:
+     initContainers:
       - name: wait-for-postgres
-        image: busybox:1.36
-        imagePullPolicy: IfNotPresent
+        image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}" 
+        imagePullPolicy: {{ .Values.app.image.pullPolicy }}
         command: 
         - sh
         - -c
-        - printf "until nc -z %s-postgres %d; do echo waiting for postgres; sleep 2; done;" "{{ include "gophprofile-infra.fullname" . }}" (int .Values.postgres.service.port) | sh
+        - |
+          until exec 3<>/dev/tcp/{{ include "gophprofile-infra.fullname" . }}-postgres/{{ .Values.postgres.service.port }}; do 
+            echo "Waiting for PostgreSQL to start..."; 
+            sleep 2; 
+          done; 
+          exec 3>&-;
+       - name: wait-for-kafka
+        image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
+        imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+        command: 
+        - sh
+        - -c
+        - |
+          until exec 3<>/dev/tcp/{{ include "gophprofile-infra.fullname" . }}-kafka/{{ .Values.kafka.service.internalPort }}; do 
+            echo "Waiting for Kafka to start..."; 
+            sleep 2; 
+          done; 
+          exec 3>&-;    
       containers:
       - name: worker
         image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
