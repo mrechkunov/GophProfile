@@ -1,0 +1,49 @@
+{{- if .Values.observability.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-ingress
+  namespace: infra
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/proxy-body-size: "1024m" # Важно для MinIO, чтобы загружать большие файлы
+spec:
+  rules:
+  # 1. Домен для Grafana
+  - host: grafana.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "gophprofile-infra.fullname" . }}-grafana
+            port:
+              number: 3000
+
+  # 2. Домен для Jaeger UI
+  - host: jaeger.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "gophprofile-infra.fullname" . }}-jaeger
+            port:
+              number: 16686
+
+  # 3. Домен для веб-консоли MinIO (опционально, если включен MinIO)
+  {{- if .Values.minio.enabled }}
+  - host: minio-console.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ include "gophprofile-infra.fullname" . }}-minio
+            port:
+              number: 9001 # Порт веб-интерфейса MinIO
+  {{- end }}
+{{- end }}

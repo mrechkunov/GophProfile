@@ -1,6 +1,6 @@
 # Глобальные настройки именования
 nameOverride: ""
-fullnameOverride: ""
+fullnameOverride: "goph-infra"
 
 # Конфигурация PostgreSQL
 postgres:
