@@ -79,10 +79,12 @@ kind: Service
 metadata:
   name: {{ include "gophprofile-infra.fullname" . }}-grafana
 spec:
+  type: NodePort
   selector:
     {{- include "gophprofile-infra.selectorLabels" . | nindent 4 }}
     component: grafana
   ports:
   - port: 3000
     targetPort: 3000
+    nodePort: 32000
 {{- end }}
