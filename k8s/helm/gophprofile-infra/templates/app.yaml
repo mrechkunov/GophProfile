@@ -18,22 +18,33 @@ spec:
         {{- include "gophprofile-infra.selectorLabels" . | nindent 8 }}
         component: app-server
     spec:
-      # Ждем готовности инфраструктуры, используя динамические имена сервисов Helm
+      # Автономные init-контейнеры, проверяющие доступность портов без Netcat и интернета
       initContainers:
       - name: wait-for-postgres
-        image: busybox:1.36
-        imagePullPolicy: IfNotPresent
+        image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
+        imagePullPolicy: {{ .Values.app.image.pullPolicy }}
         command: 
         - sh
         - -c
-        - printf "until nc -z %s-postgres %d; do echo waiting for postgres; sleep 2; done;" "{{ include "gophprofile-infra.fullname" . }}" (int .Values.postgres.service.port) | sh
+        - |
+          until exec 3<>/dev/tcp/{{ include "gophprofile-infra.fullname" . }}-postgres/{{ .Values.postgres.service.port }}; do 
+            echo "Waiting for PostgreSQL to start..."; 
+            sleep 2; 
+          done; 
+          exec 3>&-;
       - name: wait-for-kafka
-        image: busybox:1.36
-        imagePullPolicy: IfNotPresent
+        image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
+        imagePullPolicy: {{ .Values.app.image.pullPolicy }}
         command: 
         - sh
         - -c
-        - printf "until nc -z %s-kafka %d; do echo waiting for kafka; sleep 2; done;" "{{ include "gophprofile-infra.fullname" . }}" (int .Values.kafka.service.internalPort) | sh
+        - |
+          until exec 3<>/dev/tcp/{{ include "gophprofile-infra.fullname" . }}-kafka/{{ .Values.kafka.service.internalPort }}; do 
+            echo "Waiting for Kafka to start..."; 
+            sleep 2; 
+          done; 
+          exec 3>&-;
+      
       containers:
       - name: api-server
         image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
@@ -44,11 +55,11 @@ spec:
           name: http
         env:
         - name: SERVER_PORT
-          value: printf ":%d" (int .Values.app.service.port) | gftpl
+          value: ":{{ .Values.app.service.port }}"
         - name: DATABASE_URI
-          value: printf "postgres://%s:%s@%s-postgres:%d/%s?sslmode=disable" .Values.postgres.env.user .Values.postgres.env.password (include "gophprofile-infra.fullname" .) (int .Values.postgres.service.port) .Values.postgres.env.db | gftpl
+          value: "postgres://{{ .Values.postgres.env.user }}:{{ .Values.postgres.env.password }}@{{ include "gophprofile-infra.fullname" . }}-postgres:{{ .Values.postgres.service.port }}/{{ .Values.postgres.env.db }}?sslmode=disable"
         - name: MINIO_HOST
-          value: printf "%s-minio:%d" (include "gophprofile-infra.fullname" .) (int .Values.minio.service.apiPort) | gftpl
+          value: "{{ include "gophprofile-infra.fullname" . }}-minio:{{ .Values.minio.service.apiPort }}"
         - name: MINIO_ROOT_USER
           value: {{ .Values.minio.env.rootUser | quote }}
         - name: MINIO_ROOT_PASSWORD
@@ -56,7 +67,7 @@ spec:
         - name: MINIO_SSL
           value: "false"
         - name: KAFKA_BROKERS
-          value: printf "%s-kafka:%d" (include "gophprofile-infra.fullname" .) (int .Values.kafka.service.internalPort) | gftpl
+          value: "{{ include "gophprofile-infra.fullname" . }}-kafka:{{ .Values.kafka.service.internalPort }}"
         - name: MIGRATIONS_PATH
           value: "file://migrations"
         - name: OTEL_SERVICE_NAME
@@ -64,7 +75,7 @@ spec:
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: "deployment.environment=development"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: printf "http://%s-otel-collector:4317" (include "gophprofile-infra.fullname" .) | gftpl
+          value: "http://{{ include "gophprofile-infra.fullname" . }}-otel-collector:4317"
         - name: OTEL_EXPORTER_OTLP_INSECURE
           value: "true"
         resources:
@@ -78,7 +89,7 @@ metadata:
     {{- include "gophprofile-infra.labels" . | nindent 4 }}
     component: app-server
 spec:
-  type: NodePort # Используем рабочий NodePort для обхода проблем с NGINX Ingress
+  type: NodePort
   selector:
     {{- include "gophprofile-infra.selectorLabels" . | nindent 4 }}
     component: app-server
@@ -106,9 +117,9 @@ spec:
         {{- include "gophprofile-infra.selectorLabels" . | nindent 8 }}
         component: worker
     spec:
-     initContainers:
+      initContainers:
       - name: wait-for-postgres
-        image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}" 
+        image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
         imagePullPolicy: {{ .Values.app.image.pullPolicy }}
         command: 
         - sh
@@ -119,18 +130,6 @@ spec:
             sleep 2; 
           done; 
           exec 3>&-;
-       - name: wait-for-kafka
-        image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
-        imagePullPolicy: {{ .Values.app.image.pullPolicy }}
-        command: 
-        - sh
-        - -c
-        - |
-          until exec 3<>/dev/tcp/{{ include "gophprofile-infra.fullname" . }}-kafka/{{ .Values.kafka.service.internalPort }}; do 
-            echo "Waiting for Kafka to start..."; 
-            sleep 2; 
-          done; 
-          exec 3>&-;    
       containers:
       - name: worker
         image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
@@ -138,11 +137,11 @@ spec:
         command: ["./worker"]
         env:
         - name: SERVER_PORT
-          value: printf ":%d" (int .Values.app.service.port) | gftpl
+          value: ":{{ .Values.app.service.port }}"
         - name: DATABASE_URI
-          value: printf "postgres://%s:%s@%s-postgres:%d/%s?sslmode=disable" .Values.postgres.env.user .Values.postgres.env.password (include "gophprofile-infra.fullname" .) (int .Values.postgres.service.port) .Values.postgres.env.db | gftpl
+          value: "postgres://{{ .Values.postgres.env.user }}:{{ .Values.postgres.env.password }}@{{ include "gophprofile-infra.fullname" . }}-postgres:{{ .Values.postgres.service.port }}/{{ .Values.postgres.env.db }}?sslmode=disable"
         - name: MINIO_HOST
-          value: printf "%s-minio:%d" (include "gophprofile-infra.fullname" .) (int .Values.minio.service.apiPort) | gftpl
+          value: "{{ include "gophprofile-infra.fullname" . }}-minio:{{ .Values.minio.service.apiPort }}"
         - name: MINIO_ROOT_USER
           value: {{ .Values.minio.env.rootUser | quote }}
         - name: MINIO_ROOT_PASSWORD
@@ -150,7 +149,7 @@ spec:
         - name: MINIO_SSL
           value: "false"
         - name: KAFKA_BROKERS
-          value: printf "%s-kafka:%d" (include "gophprofile-infra.fullname" .) (int .Values.kafka.service.internalPort) | gftpl
+          value: "{{ include "gophprofile-infra.fullname" . }}-kafka:{{ .Values.kafka.service.internalPort }}"
         - name: MIGRATIONS_PATH
           value: "file://migrations"
         - name: OTEL_SERVICE_NAME
@@ -158,7 +157,7 @@ spec:
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: "deployment.environment=development"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: printf "http://%s-otel-collector:4317" (include "gophprofile-infra.fullname" .) | gftpl
+          value: "http://{{ include "gophprofile-infra.fullname" . }}-otel-collector:4317"
         - name: OTEL_EXPORTER_OTLP_INSECURE
           value: "true"
         resources:
