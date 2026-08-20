@@ -34,7 +34,6 @@ spec:
         - sh
         - -c
         - printf "until nc -z %s-kafka %d; do echo waiting for kafka; sleep 2; done;" "{{ include "gophprofile-infra.fullname" . }}" (int .Values.kafka.service.internalPort) | sh
-      
       containers:
       - name: api-server
         image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
