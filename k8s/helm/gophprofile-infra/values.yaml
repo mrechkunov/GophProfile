@@ -1,0 +1,77 @@
+# Глобальные настройки именования
+nameOverride: ""
+fullnameOverride: ""
+
+# Конфигурация PostgreSQL
+postgres:
+  enabled: true
+  image:
+    repository: postgres
+    tag: 15-alpine
+    pullPolicy: IfNotPresent
+  env:
+    user: gophprofile_user
+    password: secret
+    db: gophprofiledb
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 100m
+    limits:
+      memory: 256Mi
+      cpu: 500m
+  persistence:
+    size: 1Gi
+    accessModes:
+      - ReadWriteOnce
+  service:
+    port: 5432
+
+# Конфигурация Kafka (KRaft mode)
+kafka:
+  enabled: true
+  image:
+    repository: confluentinc/cp-kafka
+    tag: 8.0.7
+    pullPolicy: IfNotPresent
+  clusterId: 'MkU3OEVBNTcwNTJENDM2Qk'
+  heapOpts: "-Xms512m -Xmx512m"
+  resources:
+    requests:
+      memory: 768Mi
+      cpu: 200m
+    limits:
+      memory: 1536Mi
+      cpu: 1000m
+  persistence:
+    size: 2Gi
+    accessModes:
+      - ReadWriteOnce
+  service:
+    externalPort: 9092
+    internalPort: 9093
+
+# Конфигурация MinIO
+minio:
+  enabled: true
+  image:
+    repository: quay.io/minio/minio
+    tag: RELEASE.2025-09-07T16-13-09Z
+    pullPolicy: IfNotPresent
+  env:
+    rootUser: gophprofile_user
+    rootPassword: supersecretpassword
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi
+      cpu: 200m
+  persistence:
+    size: 5Gi
+    accessModes:
+      - ReadWriteOnce
+  service:
+    apiPort: 9000
+    consolePort: 9001

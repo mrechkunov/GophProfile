@@ -1,0 +1,82 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-postgres
+  labels:
+    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    component: postgres
+spec:
+  accessModes:
+    {{- toYaml .Values.postgres.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.postgres.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-postgres
+  labels:
+    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    component: postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "gophprofile-infra.selectorLabels" . | nindent 6 }}
+      component: postgres
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile-infra.selectorLabels" . | nindent 8 }}
+        component: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+        imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+        env:
+        - name: POSTGRES_USER
+          value: {{ .Values.postgres.env.user | quote }}
+        - name: POSTGRES_PASSWORD
+          value: {{ .Values.postgres.env.password | quote }}
+        - name: POSTGRES_DB
+          value: {{ .Values.postgres.env.db | quote }}
+        ports:
+        - containerPort: {{ .Values.postgres.service.port }}
+        resources:
+          {{- toYaml .Values.postgres.resources | nindent 10 }}
+        volumeMounts:
+        - name: pg-data
+          mountPath: /var/lib/postgresql/data
+        readinessProbe:
+          exec:
+            command: 
+            - sh
+            - -c
+            - printf "pg_isready -U %s -d %s && PGPASSWORD=%s psql -U %s -d %s -c 'SELECT 1;'" "{{ .Values.postgres.env.user }}" "{{ .Values.postgres.env.db }}" "{{ .Values.postgres.env.password }}" "{{ .Values.postgres.env.user }}" "{{ .Values.postgres.env.db }}" | sh
+          initialDelaySeconds: 15
+          periodSeconds: 10
+      volumes:
+      - name: pg-data
+        persistentVolumeClaim:
+          claimName: {{ include "gophprofile-infra.fullname" . }}-postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-postgres
+  labels:
+    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    component: postgres
+spec:
+  selector:
+    {{- include "gophprofile-infra.selectorLabels" . | nindent 4 }}
+    component: postgres
+  ports:
+  - port: {{ .Values.postgres.service.port }}
+    targetPort: {{ .Values.postgres.service.port }}
+{{- end }}

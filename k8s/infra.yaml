@@ -1,0 +1,171 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  resources: { requests: { storage: 200Mi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        env:
+        - name: POSTGRES_USER
+          value: gophprofile_user
+        - name: POSTGRES_PASSWORD
+          value: secret
+        - name: POSTGRES_DB
+          value: gophprofiledb
+        ports:
+        - containerPort: 5432
+        resources:
+          requests: { memory: "128Mi", cpu: "100m" }
+          limits: { memory: "256Mi", cpu: "500m" }
+        volumeMounts:
+        - name: pg-data
+          mountPath: /var/lib/postgresql/data
+        readinessProbe:
+          exec:
+            command: ["sh", "-c", "pg_isready -U gophprofile_user -d gophprofiledb && psql -U gophprofile_user -d gophprofiledb -c 'SELECT 1;'"]
+          initialDelaySeconds: 10
+          periodSeconds: 5
+      volumes:
+      - name: pg-data
+        persistentVolumeClaim:
+          claimName: postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-broker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-broker
+  template:
+    metadata:
+      labels:
+        app: kafka-broker
+    spec:
+      containers:
+      - name: kafka-broker
+        image: confluentinc/cp-kafka:8.0.7
+        command: ["sh", "-c", "unset KAFKA_PORT; exec /etc/confluent/docker/run"]
+        ports:
+        - containerPort: 9092
+        - containerPort: 9093
+        - containerPort: 29093  
+        env:
+        - name: KAFKA_NODE_ID
+          value: "1"           
+        - name: KAFKA_PROCESS_ROLES
+          value: 'broker,controller'
+        - name: KAFKA_LISTENERS
+          value: 'PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:9093,CONTROLLER://0.0.0.0:29093'
+        - name: KAFKA_ADVERTISED_LISTENERS
+          value: 'PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka-broker:9093' 
+        - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+          value: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT'
+        - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+          value: '1@localhost:29093' 
+        - name: KAFKA_INTER_BROKER_LISTENER_NAME
+          value: 'PLAINTEXT_INTERNAL' 
+        - name: KAFKA_CONTROLLER_LISTENER_NAMES
+          value: 'CONTROLLER'
+        - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+          value: "1"            
+        - name: CLUSTER_ID
+          value: 'MkU3OEVBNTcwNTJENDM2Qk'
+        - name: KAFKA_HEAP_OPTS
+          value: "-Xms1G -Xmx1G"
+        resources:
+          requests: { memory: "1024Mi", cpu: "2000m" }
+          limits: { memory: "2048Mi", cpu: "4000m" }
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-broker # Хост для KAFKA_BROKERS=kafka-broker:9093
+spec:
+  selector:
+    app: kafka-broker
+  ports:
+  - name: external
+    port: 9092
+    targetPort: 9092
+  - name: internal
+    port: 9093
+    targetPort: 9093
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+      - name: minio
+        image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+        command: ["/usr/bin/minio"]
+        args: ["server", "--console-address", ":9001", "/data"]
+        ports:
+        - containerPort: 9000
+        - containerPort: 9001
+        env:
+        - name: MINIO_ROOT_USER
+          value: gophprofile_user
+        - name: MINIO_ROOT_PASSWORD
+          value: supersecretpassword
+        resources:
+          requests: { memory: "128Mi", cpu: "50m" }
+          limits: { memory: "256Mi", cpu: "200m" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+spec:
+  selector:
+    app: minio
+  ports:
+  - name: api
+    port: 9000
+    targetPort: 9000
+  - name: console
+    port: 9001
+    targetPort: 9001

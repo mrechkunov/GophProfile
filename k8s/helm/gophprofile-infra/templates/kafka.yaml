@@ -1,0 +1,97 @@
+{{- if .Values.kafka.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-kafka
+  labels:
+    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    component: kafka
+spec:
+  accessModes:
+    {{- toYaml .Values.kafka.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.kafka.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-kafka
+  labels:
+    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    component: kafka
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "gophprofile-infra.selectorLabels" . | nindent 6 }}
+      component: kafka
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile-infra.selectorLabels" . | nindent 8 }}
+        component: kafka
+    spec:
+      containers:
+      - name: kafka-broker
+        image: "{{ .Values.kafka.image.repository }}:{{ .Values.kafka.image.tag }}"
+        imagePullPolicy: {{ .Values.kafka.image.pullPolicy }}
+        command: ["sh", "-c", "unset KAFKA_PORT; exec /etc/confluent/docker/run"]
+        ports:
+        - containerPort: {{ .Values.kafka.service.externalPort }}
+        - containerPort: {{ .Values.kafka.service.internalPort }}
+        - containerPort: 29093  
+        env:
+        - name: KAFKA_NODE_ID
+          value: "1"           
+        - name: KAFKA_PROCESS_ROLES
+          value: 'broker,controller'
+        - name: KAFKA_LISTENERS
+          value: printf "PLAINTEXT://0.0.0.0:%d,PLAINTEXT_INTERNAL://0.0.0.0:%d,CONTROLLER://0.0.0.0:29093" (int .Values.kafka.service.externalPort) (int .Values.kafka.service.internalPort) | gftpl
+        - name: KAFKA_ADVERTISED_LISTENERS
+          value: printf "PLAINTEXT://localhost:%d,PLAINTEXT_INTERNAL://%s-kafka:%d" (int .Values.kafka.service.externalPort) (include "gophprofile-infra.fullname" .) (int .Values.kafka.service.internalPort) | gftpl
+        - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
+          value: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT'
+        - name: KAFKA_CONTROLLER_QUORUM_VOTERS
+          value: '1@localhost:29093' 
+        - name: KAFKA_INTER_BROKER_LISTENER_NAME
+          value: 'PLAINTEXT_INTERNAL' 
+        - name: KAFKA_CONTROLLER_LISTENER_NAMES
+          value: 'CONTROLLER'
+        - name: KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR
+          value: "1"            
+        - name: CLUSTER_ID
+          value: {{ .Values.kafka.clusterId | quote }}
+        - name: KAFKA_HEAP_OPTS
+          value: {{ .Values.kafka.heapOpts | quote }}
+        resources:
+          {{- toYaml .Values.kafka.resources | nindent 10 }}
+        volumeMounts:
+        - name: kafka-data
+          mountPath: /var/lib/kafka/data
+      volumes:
+      - name: kafka-data
+        persistentVolumeClaim:
+          claimName: {{ include "gophprofile-infra.fullname" . }}-kafka
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-kafka
+  labels:
+    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    component: kafka
+spec:
+  selector:
+    {{- include "gophprofile-infra.selectorLabels" . | nindent 4 }}
+    component: kafka
+  ports:
+  - name: external
+    port: {{ .Values.kafka.service.externalPort }}
+    targetPort: {{ .Values.kafka.service.externalPort }}
+  - name: internal
+    port: {{ .Values.kafka.service.internalPort }}
+    targetPort: {{ .Values.kafka.service.internalPort }}
+{{- end }}
