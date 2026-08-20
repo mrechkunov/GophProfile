@@ -1,0 +1,102 @@
+{{- if .Values.observability.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-prometheus
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  resources:
+    requests:
+      storage: {{ .Values.observability.prometheus.persistence.size }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-prometheus-config
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+    scrape_configs:
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+      - job_name: 'node'
+        static_configs:
+          - targets: ['{{ include "gophprofile-infra.fullname" . }}-nodeexporter:9100']
+      - job_name: 'otel-collector'
+        static_configs:
+          - targets: ['{{ include "gophprofile-infra.fullname" . }}-otel-collector:8889']
+      
+      # Интеграция с нашими экспортерами баз данных:
+      {{- if .Values.postgres.enabled }}
+      - job_name: 'postgres'
+        static_configs:
+          - targets: ['{{ include "gophprofile-infra.fullname" . }}-postgres:9187']
+      {{- end }}
+      {{- if .Values.kafka.enabled }}
+      - job_name: 'kafka'
+        static_configs:
+          - targets: ['{{ include "gophprofile-infra.fullname" . }}-kafka:9404']
+      {{- end }}
+      {{- if .Values.minio.enabled }}
+      - job_name: 'minio'
+        metrics_path: /minio/v2/metrics/cluster
+        static_configs:
+          - targets: ['{{ include "gophprofile-infra.fullname" . }}-minio:9000']
+      {{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-prometheus
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "gophprofile-infra.selectorLabels" . | nindent 6 }}
+      component: prometheus
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile-infra.selectorLabels" . | nindent 8 }}
+        component: prometheus
+    spec:
+      containers:
+      - name: prometheus
+        image: "{{ .Values.observability.prometheus.image }}"
+        args:
+          - "--config.file=/etc/prometheus/prometheus.yml"
+          - "--storage.tsdb.path=/prometheus"
+        ports:
+        - containerPort: 9090
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/prometheus/prometheus.yml
+          subPath: prometheus.yml
+        - name: storage
+          mountPath: /prometheus
+        resources:
+          {{- toYaml .Values.observability.prometheus.resources | nindent 10 }}
+      volumes:
+      - name: config-volume
+        configMap:
+          name: {{ include "gophprofile-infra.fullname" . }}-prometheus-config
+      - name: storage
+        persistentVolumeClaim:
+          claimName: {{ include "gophprofile-infra.fullname" . }}-prometheus
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-prometheus
+spec:
+  selector:
+    {{- include "gophprofile-infra.selectorLabels" . | nindent 4 }}
+    component: prometheus
+  ports:
+  - port: 9090
+    targetPort: 9090
+{{- end }}

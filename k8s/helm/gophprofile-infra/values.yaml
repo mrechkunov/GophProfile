@@ -75,3 +75,51 @@ minio:
   service:
     apiPort: 9000
     consolePort: 9001
+
+# Настройки стека Observability
+observability:
+  enabled: true
+  
+  otelCollector:
+    image: otel/opentelemetry-collector-contrib:0.143.0
+    resources:
+      requests: { memory: "128Mi", cpu: "200m" }
+      limits: { memory: "256Mi", cpu: "400m" }
+      
+  jaeger:
+    image: jaegertracing/all-in-one:1.76.0
+    resources:
+      requests: { memory: "128Mi", cpu: "50m" }
+      limits: { memory: "256Mi", cpu: "200m" }
+      
+  loki:
+    image: grafana/loki:main-0fd55b9
+    resources:
+      requests: { memory: "128Mi", cpu: "50m" }
+      limits: { memory: "256Mi", cpu: "200m" }
+    persistence:
+      size: 5Gi
+      
+  prometheus:
+    image: prom/prometheus:v3.13.2
+    resources:
+      requests: { memory: "128Mi", cpu: "50m" }
+      limits: { memory: "256Mi", cpu: "200m" }
+    persistence:
+      size: 5Gi
+      
+  grafana:
+    image: grafana/grafana:13.1
+    adminUser: admin
+    adminPassword: admin
+    resources:
+      requests: { memory: "128Mi", cpu: "50m" }
+      limits: { memory: "256Mi", cpu: "200m" }
+    persistence:
+      size: 1Gi
+      
+  nodeExporter:
+    image: prom/node-exporter:v1.12.1
+    resources:
+      requests: { memory: "32Mi", cpu: "10m" }
+      limits: { memory: "64Mi", cpu: "50m" }
