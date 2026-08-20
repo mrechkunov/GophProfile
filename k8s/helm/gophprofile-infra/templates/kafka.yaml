@@ -49,9 +49,9 @@ spec:
         - name: KAFKA_PROCESS_ROLES
           value: 'broker,controller'
         - name: KAFKA_LISTENERS
-          value: printf "PLAINTEXT://0.0.0.0:%d,PLAINTEXT_INTERNAL://0.0.0.0:%d,CONTROLLER://0.0.0.0:29093" (int .Values.kafka.service.externalPort) (int .Values.kafka.service.internalPort) | gftpl
+          value: {{ printf "PLAINTEXT://0.0.0.0:%d,PLAINTEXT_INTERNAL://0.0.0.0:%d,CONTROLLER://0.0.0.0:29093" (int .Values.kafka.service.externalPort) (int .Values.kafka.service.internalPort) | quote }}
         - name: KAFKA_ADVERTISED_LISTENERS
-          value: printf "PLAINTEXT://localhost:%d,PLAINTEXT_INTERNAL://%s-kafka:%d" (int .Values.kafka.service.externalPort) (include "gophprofile-infra.fullname" .) (int .Values.kafka.service.internalPort) | gftpl
+          value: {{ printf "PLAINTEXT://localhost:%d,PLAINTEXT_INTERNAL://%s-kafka:%d" (int .Values.kafka.service.externalPort) (include "gophprofile-infra.fullname" .) (int .Values.kafka.service.internalPort) | quote }}
         - name: KAFKA_LISTENER_SECURITY_PROTOCOL_MAP
           value: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT'
         - name: KAFKA_CONTROLLER_QUORUM_VOTERS
