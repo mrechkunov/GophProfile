@@ -1,6 +1,6 @@
 {{- if .Values.observability.enabled }}
 apiVersion: apps/v1
-kind: DaemonSet # Изменено с Deployment на DaemonSet для запуска на всех нодах
+kind: DaemonSet
 metadata:
   name: {{ include "gophprofile-infra.fullname" . }}-nodeexporter
   labels:
