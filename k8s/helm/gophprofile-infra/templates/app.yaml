@@ -1,0 +1,150 @@
+{{- if .Values.app.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-app-server
+  labels:
+    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    component: app-server
+spec:
+  replicas: {{ .Values.app.replicas }}
+  selector:
+    matchLabels:
+      {{- include "gophprofile-infra.selectorLabels" . | nindent 6 }}
+      component: app-server
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile-infra.selectorLabels" . | nindent 8 }}
+        component: app-server
+    spec:
+      # Ждем готовности инфраструктуры, используя динамические имена сервисов Helm
+      initContainers:
+      - name: wait-for-postgres
+        image: busybox:1.36
+        imagePullPolicy: IfNotPresent
+        command: 
+        - sh
+        - -c
+        - printf "until nc -z %s-postgres %d; do echo waiting for postgres; sleep 2; done;" "{{ include "gophprofile-infra.fullname" . }}" (int .Values.postgres.service.port) | sh
+      - name: wait-for-kafka
+        image: busybox:1.36
+        imagePullPolicy: IfNotPresent
+        command: 
+        - sh
+        - -c
+        - printf "until nc -z %s-kafka %d; do echo waiting for kafka; sleep 2; done;" "{{ include "gophprofile-infra.fullname" . }}" (int .Values.kafka.service.internalPort) | sh
+      
+      containers:
+      - name: api-server
+        image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
+        imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+        command: ["./gophprofile"]
+        ports:
+        - containerPort: {{ .Values.app.service.port }}
+          name: http
+        env:
+        - name: SERVER_PORT
+          value: printf ":%d" (int .Values.app.service.port) | gftpl
+        - name: DATABASE_URI
+          value: printf "postgres://%s:%s@%s-postgres:%d/%s?sslmode=disable" .Values.postgres.env.user .Values.postgres.env.password (include "gophprofile-infra.fullname" .) (int .Values.postgres.service.port) .Values.postgres.env.db | gftpl
+        - name: MINIO_HOST
+          value: printf "%s-minio:%d" (include "gophprofile-infra.fullname" .) (int .Values.minio.service.apiPort) | gftpl
+        - name: MINIO_ROOT_USER
+          value: {{ .Values.minio.env.rootUser | quote }}
+        - name: MINIO_ROOT_PASSWORD
+          value: {{ .Values.minio.env.rootPassword | quote }}
+        - name: MINIO_SSL
+          value: "false"
+        - name: KAFKA_BROKERS
+          value: printf "%s-kafka:%d" (include "gophprofile-infra.fullname" .) (int .Values.kafka.service.internalPort) | gftpl
+        - name: MIGRATIONS_PATH
+          value: "file://migrations"
+        - name: OTEL_SERVICE_NAME
+          value: "gophprofileservice"
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: "deployment.environment=development"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: printf "http://%s-otel-collector:4317" (include "gophprofile-infra.fullname" .) | gftpl
+        - name: OTEL_EXPORTER_OTLP_INSECURE
+          value: "true"
+        resources:
+          {{- toYaml .Values.app.resources | nindent 10 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-app-server
+  labels:
+    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    component: app-server
+spec:
+  type: NodePort # Используем рабочий NodePort для обхода проблем с NGINX Ingress
+  selector:
+    {{- include "gophprofile-infra.selectorLabels" . | nindent 4 }}
+    component: app-server
+  ports:
+  - port: {{ .Values.app.service.port }}
+    targetPort: {{ .Values.app.service.port }}
+    nodePort: {{ .Values.app.service.nodePort }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gophprofile-infra.fullname" . }}-worker
+  labels:
+    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    component: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "gophprofile-infra.selectorLabels" . | nindent 6 }}
+      component: worker
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile-infra.selectorLabels" . | nindent 8 }}
+        component: worker
+    spec:
+      initContainers:
+      - name: wait-for-postgres
+        image: busybox:1.36
+        imagePullPolicy: IfNotPresent
+        command: 
+        - sh
+        - -c
+        - printf "until nc -z %s-postgres %d; do echo waiting for postgres; sleep 2; done;" "{{ include "gophprofile-infra.fullname" . }}" (int .Values.postgres.service.port) | sh
+      containers:
+      - name: worker
+        image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
+        imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+        command: ["./worker"]
+        env:
+        - name: SERVER_PORT
+          value: printf ":%d" (int .Values.app.service.port) | gftpl
+        - name: DATABASE_URI
+          value: printf "postgres://%s:%s@%s-postgres:%d/%s?sslmode=disable" .Values.postgres.env.user .Values.postgres.env.password (include "gophprofile-infra.fullname" .) (int .Values.postgres.service.port) .Values.postgres.env.db | gftpl
+        - name: MINIO_HOST
+          value: printf "%s-minio:%d" (include "gophprofile-infra.fullname" .) (int .Values.minio.service.apiPort) | gftpl
+        - name: MINIO_ROOT_USER
+          value: {{ .Values.minio.env.rootUser | quote }}
+        - name: MINIO_ROOT_PASSWORD
+          value: {{ .Values.minio.env.rootPassword | quote }}
+        - name: MINIO_SSL
+          value: "false"
+        - name: KAFKA_BROKERS
+          value: printf "%s-kafka:%d" (include "gophprofile-infra.fullname" .) (int .Values.kafka.service.internalPort) | gftpl
+        - name: MIGRATIONS_PATH
+          value: "file://migrations"
+        - name: OTEL_SERVICE_NAME
+          value: "gophprofileservice-worker"
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: "deployment.environment=development"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: printf "http://%s-otel-collector:4317" (include "gophprofile-infra.fullname" .) | gftpl
+        - name: OTEL_EXPORTER_OTLP_INSECURE
+          value: "true"
+        resources:
+          {{- toYaml .Values.app.resources | nindent 10 }}
+{{- end }}

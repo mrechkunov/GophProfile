@@ -123,3 +123,21 @@ observability:
     resources:
       requests: { memory: "32Mi", cpu: "10m" }
       limits: { memory: "64Mi", cpu: "50m" }
+
+app:
+  enabled: true
+  replicas: 1
+  image:
+    repository: gophprofile-app
+    tag: 12.0.1                  
+    pullPolicy: Never            
+  service:
+    port: 8080
+    nodePort: 32080              
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
