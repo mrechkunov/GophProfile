@@ -1,4 +1,7 @@
 1. добавлена папка k8s в ней все файлы для запуска в кубе
 2. настроить (скачать ingress-nginx) не удалось в локальный кластер (minikube/rancher) поэтому сделал через NodePort
 3. для деплоя использовал локальный кластер в контейнере minikube
-4. распаковка - helm install goph-infra .k8s/helm/gophprofile-infra -n infra
+4. распаковка:
+    a. сбилдить образ gophprofile-app с тегом 12.0.1 и положит его в локальный репозиторий кубика
+    b. helm install goph-infra .k8s/helm/gophprofile-infra -n infra
+    c. из файла k8s/helm/gophprofile-infra/portmaping запустить в консоле команды для форвардинга портов на локальную машину
