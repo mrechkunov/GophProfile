@@ -75,12 +75,11 @@ kind: Service
 metadata:
   name: {{ include "gophprofile.fullname" . }}-prometheus
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     {{- include "gophprofile.selectorLabels" . | nindent 4 }}
     component: prometheus
   ports:
   - port: 9090
     targetPort: 9090
-    nodePort: 32002
 {{- end }}

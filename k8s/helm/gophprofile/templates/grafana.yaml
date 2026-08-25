@@ -59,7 +59,10 @@ spec:
         - name: GF_SECURITY_ADMIN_USER
           value: {{ .Values.observability.grafana.adminUser | quote }}
         - name: GF_SECURITY_ADMIN_PASSWORD
-          value: {{ .Values.observability.grafana.adminPassword | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "gophprofile.fullname" . }}-secrets
+              key: grafana-admin-password
         volumeMounts:
         - name: datasources-volume
           mountPath: /etc/grafana/provisioning/datasources/datasources.yml
@@ -79,12 +82,11 @@ kind: Service
 metadata:
   name: {{ include "gophprofile.fullname" . }}-grafana
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     {{- include "gophprofile.selectorLabels" . | nindent 4 }}
     component: grafana
   ports:
   - port: 3000
     targetPort: 3000
-    nodePort: 32000
 {{- end }}

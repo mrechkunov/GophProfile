@@ -31,7 +31,7 @@ kind: Service
 metadata:
   name: {{ include "gophprofile.fullname" . }}-jaeger
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     {{- include "gophprofile.selectorLabels" . | nindent 4 }}
     component: jaeger
@@ -39,7 +39,6 @@ spec:
   - name: ui
     port: 16686
     targetPort: 16686
-    nodePort: 32001
   - name: otlp
     port: 4317
     targetPort: 4317

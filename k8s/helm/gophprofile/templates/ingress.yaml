@@ -1,4 +1,5 @@
 {{- if and .Values.app.enabled .Values.ingress.enabled -}}
+{{- $root := . -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -17,13 +18,13 @@ spec:
       http:
         paths:
           {{- range .paths }}
-          - path: {{ .path }}
+          - path: {{ .path | quote }}
             pathType: {{ .pathType | default "Prefix" }}
             backend:
               service:
-                name: {{ include "gophprofile.fullname" $ }}-{{ .serviceNameSuffix }}
+                name: {{ include "gophprofile.fullname" $root }}-{{ .serviceNameSuffix }}
                 port:
-                  number: {{ .servicePort }}
+                  number: {{ .servicePort | int }}
           {{- end }}
     {{- end }}
 {{- end }}

@@ -42,7 +42,10 @@ spec:
         - name: POSTGRES_USER
           value: {{ .Values.postgres.env.user | quote }}
         - name: POSTGRES_PASSWORD
-          value: {{ .Values.postgres.env.password | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "gophprofile.fullname" . }}-secrets
+              key: postgres-password
         - name: POSTGRES_DB
           value: {{ .Values.postgres.env.db | quote }}
         ports:
@@ -57,7 +60,9 @@ spec:
             command: 
             - sh
             - -c
-            - printf "pg_isready -U %s -d %s && PGPASSWORD=%s psql -U %s -d %s -c 'SELECT 1;'" "{{ .Values.postgres.env.user }}" "{{ .Values.postgres.env.db }}" "{{ .Values.postgres.env.password }}" "{{ .Values.postgres.env.user }}" "{{ .Values.postgres.env.db }}" | sh
+            - |
+              pg_isready -U "{{ .Values.postgres.env.user }}" -d "{{ .Values.postgres.env.db }}" && \
+              PGPASSWORD="{{ .Values.postgres.env.password }}" psql -U "{{ .Values.postgres.env.user }}" -d "{{ .Values.postgres.env.db }}" -c "SELECT 1;"
           initialDelaySeconds: 15
           periodSeconds: 10
       volumes:
@@ -73,13 +78,12 @@ metadata:
     {{- include "gophprofile.labels" . | nindent 4 }}
     component: postgres
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     {{- include "gophprofile.selectorLabels" . | nindent 4 }}
     component: postgres
   ports:
   - port: {{ .Values.postgres.service.port }}
     targetPort: {{ .Values.postgres.service.port }}
-    nodePort: 30543
     protocol: TCP
 {{- end }}

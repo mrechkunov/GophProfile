@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/middleware"
 	"github.com/go-chi/chi/v5"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -22,36 +23,20 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 	defer stop()
 
-	//  Инициализируем провайдер логов
+	// Инициализируем провайдеры логов, трейсов и метрик (БЕЗ встроенных defer)
 	var otelLogsShutdown func()
 	logger.Log, otelLogsShutdown = logger.InitLoggerProvider(ctx)
-	defer func() {
-		if otelLogsShutdown != nil {
-			otelLogsShutdown()
-		}
-	}()
-
-	//  Инициализируем провайдер трейсинга
 	otelTracesShutdown := logger.InitTraceProvider(ctx)
-	defer func() {
-		if otelTracesShutdown != nil {
-			otelTracesShutdown()
-		}
-	}()
-
-	//  Инициализируем провайдер метрик
 	otelMetricsShutdown := logger.InitMeterProvider(ctx)
-	defer func() {
-		if otelMetricsShutdown != nil {
-			otelMetricsShutdown()
-		}
-	}()
 
-	//  Инициализируем конфигурацию сервера
+	// Инициализируем конфигурацию сервера
 	config.InitServer(ctx)
 
 	// Настраиваем зависимости и роутер
 	router := chi.NewRouter()
+
+	// ВАЖНО: Базовый middleware для предотвращения падения процесса при panic в хендлерах
+	router.Use(middleware.Recoverer)
 
 	repo := repository.NewPostgresAvatarRepository(config.ConnServer.DB)
 	kafkaAdapter := &repository.KafkaProducer{
@@ -87,9 +72,13 @@ func main() {
 	router.Delete("/api/v1/avatars/{avatar_id}", avatarHandler.DeleteAvatarHandler)
 	router.Get("/health", avatarHandler.HealthCheckHandler)
 
+	// настройка http-сервера с таймаутами (Защита ресурсов)
 	server := &http.Server{
-		Addr:    config.CfgServer.Port,
-		Handler: wrappedHandler,
+		Addr:         config.CfgServer.Port,
+		Handler:      wrappedHandler,
+		ReadTimeout:  5 * time.Second,   // Время на чтение заголовков и тела запроса
+		WriteTimeout: 10 * time.Second,  // Время на отправку ответа клиенту
+		IdleTimeout:  120 * time.Second, // Время удержания Keep-Alive соединения
 	}
 
 	logger.Log.Info("server starting", "port", config.CfgServer.Port)
@@ -105,11 +94,11 @@ func main() {
 	<-ctx.Done()
 	logger.Log.Info("Получен сигнал завершения. Начинаем graceful shutdown...")
 
-	//  Ограничиваем время на плавную остановку
+	// Ограничиваем время на плавную остановку сервера
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	// Пытаемся плавно остановить сервер (прекращаем прием новых запросов)
+	// Прекращаем прием новых запросов
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		logger.Log.Error("Сервер завершился с ошибкой при остановке:", "error", err)
 	} else {
@@ -128,5 +117,20 @@ func main() {
 			logger.Log.Error("Ошибка при закрытии Kafka Producer", "error", err)
 		}
 	}
-	logger.Log.Info("Graceful shutdown успешно завершен.")
+
+	// сброс телеметрии (Выполняем синхронно в самом конце)
+	logger.Log.Info("Отправка оставшихся метрик, трейсов и логов в коллектор...")
+
+	if otelMetricsShutdown != nil {
+		otelMetricsShutdown()
+	}
+	if otelTracesShutdown != nil {
+		otelTracesShutdown()
+	}
+	if otelLogsShutdown != nil {
+		otelLogsShutdown()
+	}
+
+	// Пишем через стандартный slog, так как кастомный logger.Log к этому моменту уже закрыт
+	slog.Info("Graceful shutdown успешно завершен.")
 }

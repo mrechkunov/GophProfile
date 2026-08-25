@@ -7,7 +7,7 @@ metadata:
     {{- include "gophprofile.labels" . | nindent 4 }}
     component: app-server
 spec:
-  replicas: {{ .Values.app.replicas }}
+  #replicas: {{ .Values.app.replicas }}
   selector:
     matchLabels:
       {{- include "gophprofile.selectorLabels" . | nindent 6 }}
@@ -18,6 +18,32 @@ spec:
         {{- include "gophprofile.selectorLabels" . | nindent 8 }}
         component: app-server
     spec:
+      terminationGracePeriodSeconds: 30
+      initContainers:
+      - name: wait-for-dependencies
+        image: alpine:3.18
+        command:
+        - sh
+        - -c
+        - |
+          echo "Ожидание запуска инфраструктуры..."
+          
+          until nc -z -w 2 {{ include "gophprofile.fullname" . }}-postgres 5432; do
+            echo "Ожидание PostgreSQL (5432)..."
+            sleep 2
+          done
+          
+          until nc -z -w 2 {{ include "gophprofile.fullname" . }}-minio {{ .Values.minio.service.apiPort }}; do
+            echo "Ожидание MinIO ({{ .Values.minio.service.apiPort }})..."
+            sleep 2
+          done
+          
+          until nc -z -w 2 {{ include "gophprofile.fullname" . }}-kafka {{ .Values.kafka.service.internalPort }}; do
+            echo "Ожидание Kafka ({{ .Values.kafka.service.internalPort }})..."
+            sleep 2
+          done
+          
+          echo "Вся инфраструктура готова к работе!"
       containers:
       - name: api-server
         image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
@@ -29,14 +55,22 @@ spec:
         env:
         - name: SERVER_PORT
           value: ":{{ .Values.app.service.port }}"
+        - name: DB_PASSWORD_RAW
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "gophprofile.fullname" . }}-secrets
+              key: postgres-password
         - name: DATABASE_URI
-          value: "postgres://{{ .Values.postgres.env.user }}:{{ .Values.postgres.env.password }}@{{ include "gophprofile.fullname" . }}-postgres:{{ .Values.postgres.service.port }}/{{ .Values.postgres.env.db }}?sslmode=disable"
+          value: "postgres://{{ .Values.postgres.env.user }}:$(DB_PASSWORD_RAW)@{{ include "gophprofile.fullname" . }}-postgres:5432/{{ .Values.postgres.env.db }}?sslmode=disable"
         - name: MINIO_HOST
           value: "{{ include "gophprofile.fullname" . }}-minio:{{ .Values.minio.service.apiPort }}"
         - name: MINIO_ROOT_USER
           value: {{ .Values.minio.env.rootUser | quote }}
         - name: MINIO_ROOT_PASSWORD
-          value: {{ .Values.minio.env.rootPassword | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "gophprofile.fullname" . }}-secrets
+              key: minio-secret-key
         - name: MINIO_SSL
           value: "false"
         - name: KAFKA_BROKERS
@@ -62,14 +96,14 @@ metadata:
     {{- include "gophprofile.labels" . | nindent 4 }}
     component: app-server
 spec:
-  type: NodePort
+  type: ClusterIP
   selector:
     {{- include "gophprofile.selectorLabels" . | nindent 4 }}
     component: app-server
   ports:
   - port: {{ .Values.app.service.port }}
     targetPort: {{ .Values.app.service.port }}
-    nodePort: {{ .Values.app.service.nodePort }}
+    # nodePort: {{ .Values.app.service.nodePort }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -79,7 +113,7 @@ metadata:
     {{- include "gophprofile.labels" . | nindent 4 }}
     component: worker
 spec:
-  replicas: 3
+  #replicas: 1
   selector:
     matchLabels:
       {{- include "gophprofile.selectorLabels" . | nindent 6 }}
@@ -90,6 +124,32 @@ spec:
         {{- include "gophprofile.selectorLabels" . | nindent 8 }}
         component: worker
     spec:
+      terminationGracePeriodSeconds: 45
+      initContainers:
+      - name: wait-for-dependencies
+        image: alpine:3.18
+        command:
+        - sh
+        - -c
+        - |
+          echo "Ожидание запуска инфраструктуры..."
+          
+          until nc -z -w 2 {{ include "gophprofile.fullname" . }}-postgres 5432; do
+            echo "Ожидание PostgreSQL (5432)..."
+            sleep 2
+          done
+          
+          until nc -z -w 2 {{ include "gophprofile.fullname" . }}-minio {{ .Values.minio.service.apiPort }}; do
+            echo "Ожидание MinIO ({{ .Values.minio.service.apiPort }})..."
+            sleep 2
+          done
+          
+          until nc -z -w 2 {{ include "gophprofile.fullname" . }}-kafka {{ .Values.kafka.service.internalPort }}; do
+            echo "Ожидание Kafka ({{ .Values.kafka.service.internalPort }})..."
+            sleep 2
+          done
+          
+          echo "Вся инфраструктура готова к работе!"
       containers:
       - name: worker
         image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
@@ -98,14 +158,22 @@ spec:
         env:
         - name: SERVER_PORT
           value: ":{{ .Values.app.service.port }}"
+        - name: DB_PASSWORD_RAW
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "gophprofile.fullname" . }}-secrets
+              key: postgres-password
         - name: DATABASE_URI
-          value: "postgres://{{ .Values.postgres.env.user }}:{{ .Values.postgres.env.password }}@{{ include "gophprofile.fullname" . }}-postgres:{{ .Values.postgres.service.port }}/{{ .Values.postgres.env.db }}?sslmode=disable"
+          value: "postgres://{{ .Values.postgres.env.user }}:$(DB_PASSWORD_RAW)@{{ include "gophprofile.fullname" . }}-postgres:5432/{{ .Values.postgres.env.db }}?sslmode=disable"
         - name: MINIO_HOST
           value: "{{ include "gophprofile.fullname" . }}-minio:{{ .Values.minio.service.apiPort }}"
         - name: MINIO_ROOT_USER
           value: {{ .Values.minio.env.rootUser | quote }}
         - name: MINIO_ROOT_PASSWORD
-          value: {{ .Values.minio.env.rootPassword | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "gophprofile.fullname" . }}-secrets
+              key: minio-secret-key
         - name: MINIO_SSL
           value: "false"
         - name: KAFKA_BROKERS
@@ -121,5 +189,5 @@ spec:
         - name: OTEL_EXPORTER_OTLP_INSECURE
           value: "true"
         resources:
-          {{- toYaml .Values.app.resources | nindent 10 }}
+          {{- toYaml .Values.app.workerResources | nindent 10 }}
 {{- end }}

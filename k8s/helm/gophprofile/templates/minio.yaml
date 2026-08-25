@@ -47,7 +47,10 @@ spec:
         - name: MINIO_ROOT_USER
           value: {{ .Values.minio.env.rootUser | quote }}
         - name: MINIO_ROOT_PASSWORD
-          value: {{ .Values.minio.env.rootPassword | quote }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "gophprofile.fullname" . }}-secrets
+              key: minio-secret-key
         resources:
           {{- toYaml .Values.minio.resources | nindent 10 }}
         volumeMounts:
