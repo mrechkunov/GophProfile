@@ -2,20 +2,20 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "gophprofile-infra.fullname" . }}-app-server
+  name: {{ include "gophprofile.fullname" . }}-app-server
   labels:
-    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    {{- include "gophprofile.labels" . | nindent 4 }}
     component: app-server
 spec:
   replicas: {{ .Values.app.replicas }}
   selector:
     matchLabels:
-      {{- include "gophprofile-infra.selectorLabels" . | nindent 6 }}
+      {{- include "gophprofile.selectorLabels" . | nindent 6 }}
       component: app-server
   template:
     metadata:
       labels:
-        {{- include "gophprofile-infra.selectorLabels" . | nindent 8 }}
+        {{- include "gophprofile.selectorLabels" . | nindent 8 }}
         component: app-server
     spec:
       containers:
@@ -30,9 +30,9 @@ spec:
         - name: SERVER_PORT
           value: ":{{ .Values.app.service.port }}"
         - name: DATABASE_URI
-          value: "postgres://{{ .Values.postgres.env.user }}:{{ .Values.postgres.env.password }}@{{ include "gophprofile-infra.fullname" . }}-postgres:{{ .Values.postgres.service.port }}/{{ .Values.postgres.env.db }}?sslmode=disable"
+          value: "postgres://{{ .Values.postgres.env.user }}:{{ .Values.postgres.env.password }}@{{ include "gophprofile.fullname" . }}-postgres:{{ .Values.postgres.service.port }}/{{ .Values.postgres.env.db }}?sslmode=disable"
         - name: MINIO_HOST
-          value: "{{ include "gophprofile-infra.fullname" . }}-minio:{{ .Values.minio.service.apiPort }}"
+          value: "{{ include "gophprofile.fullname" . }}-minio:{{ .Values.minio.service.apiPort }}"
         - name: MINIO_ROOT_USER
           value: {{ .Values.minio.env.rootUser | quote }}
         - name: MINIO_ROOT_PASSWORD
@@ -40,7 +40,7 @@ spec:
         - name: MINIO_SSL
           value: "false"
         - name: KAFKA_BROKERS
-          value: "{{ include "gophprofile-infra.fullname" . }}-kafka:{{ .Values.kafka.service.internalPort }}"
+          value: "{{ include "gophprofile.fullname" . }}-kafka:{{ .Values.kafka.service.internalPort }}"
         - name: MIGRATIONS_PATH
           value: "file://migrations"
         - name: OTEL_SERVICE_NAME
@@ -48,7 +48,7 @@ spec:
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: "deployment.environment=development"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: "http://{{ include "gophprofile-infra.fullname" . }}-otel-collector:4317"
+          value: "http://{{ include "gophprofile.fullname" . }}-otel-collector:4317"
         - name: OTEL_EXPORTER_OTLP_INSECURE
           value: "true"
         resources:
@@ -57,14 +57,14 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "gophprofile-infra.fullname" . }}-app-server
+  name: {{ include "gophprofile.fullname" . }}-app-server
   labels:
-    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    {{- include "gophprofile.labels" . | nindent 4 }}
     component: app-server
 spec:
   type: NodePort
   selector:
-    {{- include "gophprofile-infra.selectorLabels" . | nindent 4 }}
+    {{- include "gophprofile.selectorLabels" . | nindent 4 }}
     component: app-server
   ports:
   - port: {{ .Values.app.service.port }}
@@ -74,20 +74,20 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "gophprofile-infra.fullname" . }}-worker
+  name: {{ include "gophprofile.fullname" . }}-worker
   labels:
-    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    {{- include "gophprofile.labels" . | nindent 4 }}
     component: worker
 spec:
   replicas: 3
   selector:
     matchLabels:
-      {{- include "gophprofile-infra.selectorLabels" . | nindent 6 }}
+      {{- include "gophprofile.selectorLabels" . | nindent 6 }}
       component: worker
   template:
     metadata:
       labels:
-        {{- include "gophprofile-infra.selectorLabels" . | nindent 8 }}
+        {{- include "gophprofile.selectorLabels" . | nindent 8 }}
         component: worker
     spec:
       containers:
@@ -99,9 +99,9 @@ spec:
         - name: SERVER_PORT
           value: ":{{ .Values.app.service.port }}"
         - name: DATABASE_URI
-          value: "postgres://{{ .Values.postgres.env.user }}:{{ .Values.postgres.env.password }}@{{ include "gophprofile-infra.fullname" . }}-postgres:{{ .Values.postgres.service.port }}/{{ .Values.postgres.env.db }}?sslmode=disable"
+          value: "postgres://{{ .Values.postgres.env.user }}:{{ .Values.postgres.env.password }}@{{ include "gophprofile.fullname" . }}-postgres:{{ .Values.postgres.service.port }}/{{ .Values.postgres.env.db }}?sslmode=disable"
         - name: MINIO_HOST
-          value: "{{ include "gophprofile-infra.fullname" . }}-minio:{{ .Values.minio.service.apiPort }}"
+          value: "{{ include "gophprofile.fullname" . }}-minio:{{ .Values.minio.service.apiPort }}"
         - name: MINIO_ROOT_USER
           value: {{ .Values.minio.env.rootUser | quote }}
         - name: MINIO_ROOT_PASSWORD
@@ -109,7 +109,7 @@ spec:
         - name: MINIO_SSL
           value: "false"
         - name: KAFKA_BROKERS
-          value: "{{ include "gophprofile-infra.fullname" . }}-kafka:{{ .Values.kafka.service.internalPort }}"
+          value: "{{ include "gophprofile.fullname" . }}-kafka:{{ .Values.kafka.service.internalPort }}"
         - name: MIGRATIONS_PATH
           value: "file://migrations"
         - name: OTEL_SERVICE_NAME
@@ -117,27 +117,9 @@ spec:
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: "deployment.environment=development"
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: "http://{{ include "gophprofile-infra.fullname" . }}-otel-collector:4317"
+          value: "http://{{ include "gophprofile.fullname" . }}-otel-collector:4317"
         - name: OTEL_EXPORTER_OTLP_INSECURE
           value: "true"
         resources:
           {{- toYaml .Values.app.resources | nindent 10 }}
-
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ include "gophprofile-infra.fullname" . }}-worker
-  labels:
-    {{- include "gophprofile-infra.labels" . | nindent 4 }}
-    component: worker
-spec:
-  type: NodePort
-  selector:
-    {{- include "gophprofile-infra.selectorLabels" . | nindent 4 }}
-    component: worker
-  ports:
-  - port: {{ .Values.app.service.port }}
-    targetPort: {{ .Values.app.service.port }}
-    nodePort: {{ .Values.app.service.nodePort }}
-
 {{- end }}

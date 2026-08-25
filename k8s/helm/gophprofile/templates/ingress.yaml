@@ -2,9 +2,9 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "gophprofile-infra.fullname" . }}-ingress
+  name: {{ include "gophprofile.fullname" . }}-ingress
   labels:
-    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    {{- include "gophprofile.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -21,7 +21,7 @@ spec:
             pathType: {{ .pathType | default "Prefix" }}
             backend:
               service:
-                name: {{ include "gophprofile-infra.fullname" $ }}-{{ .serviceNameSuffix }}
+                name: {{ include "gophprofile.fullname" $ }}-{{ .serviceNameSuffix }}
                 port:
                   number: {{ .servicePort }}
           {{- end }}

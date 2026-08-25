@@ -1,4 +1,0 @@
-kubectl port-forward svc/goph-infra-grafana 32000:3000 -n infra --address 0.0.0.0 &
-kubectl port-forward svc/goph-infra-jaeger 32001:16686 -n infra --address 0.0.0.0 &
-kubectl port-forward svc/goph-infra-prometheus 32002:9090 -n infra --address 0.0.0.0 &
-kubectl port-forward svc/goph-infra-app-server 32080:8080 -n infra --address 0.0.0.0 &

@@ -2,9 +2,9 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "gophprofile-infra.fullname" . }}-otel-config
+  name: {{ include "gophprofile.fullname" . }}-otel-config
   labels:
-    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    {{- include "gophprofile.labels" . | nindent 4 }}
 data:
   otel-collector-config.yml: |
     extensions:
@@ -29,12 +29,12 @@ data:
         endpoint: '0.0.0.0:8889'
         namespace: "gophprofile"
       otlphttp/loki:
-        endpoint: http://{{ include "gophprofile-infra.fullname" . }}-loki:3100/otlp
+        endpoint: http://{{ include "gophprofile.fullname" . }}-loki:3100/otlp
         compression: "gzip"
         tls:
           insecure: true
       otlp/jaeger:
-        endpoint: "{{ include "gophprofile-infra.fullname" . }}-jaeger:4317"
+        endpoint: "{{ include "gophprofile.fullname" . }}-jaeger:4317"
         tls:
           insecure: true
     service:
@@ -56,19 +56,19 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "gophprofile-infra.fullname" . }}-otel-collector
+  name: {{ include "gophprofile.fullname" . }}-otel-collector
   labels:
-    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      {{- include "gophprofile-infra.selectorLabels" . | nindent 6 }}
+      {{- include "gophprofile.selectorLabels" . | nindent 6 }}
       component: otel-collector
   template:
     metadata:
       labels:
-        {{- include "gophprofile-infra.selectorLabels" . | nindent 8 }}
+        {{- include "gophprofile.selectorLabels" . | nindent 8 }}
         component: otel-collector
     spec:
       containers:
@@ -89,15 +89,15 @@ spec:
       volumes:
       - name: config
         configMap:
-          name: {{ include "gophprofile-infra.fullname" . }}-otel-config
+          name: {{ include "gophprofile.fullname" . }}-otel-config
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "gophprofile-infra.fullname" . }}-otel-collector
+  name: {{ include "gophprofile.fullname" . }}-otel-collector
 spec:
   selector:
-    {{- include "gophprofile-infra.selectorLabels" . | nindent 4 }}
+    {{- include "gophprofile.selectorLabels" . | nindent 4 }}
     component: otel-collector
   ports:
   - name: grpc

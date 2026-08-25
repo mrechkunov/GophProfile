@@ -1,10 +1,10 @@
 {{/* Имя чарта */}}
-{{- define "gophprofile-infra.name" -}}
+{{- define "gophprofile.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
 {{/* Полное имя релиза */}}
-{{- define "gophprofile-infra.fullname" -}}
+{{- define "gophprofile.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
@@ -18,14 +18,14 @@
 {{- end }}
 
 {{/* Общие лейблы */}}
-{{- define "gophprofile-infra.labels" -}}
+{{- define "gophprofile.labels" -}}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
-{{ include "gophprofile-infra.selectorLabels" . }}
+{{ include "gophprofile.selectorLabels" . }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/* Селектор-лейблы */}}
-{{- define "gophprofile-infra.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "gophprofile-infra.name" . }}
+{{- define "gophprofile.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "gophprofile.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}

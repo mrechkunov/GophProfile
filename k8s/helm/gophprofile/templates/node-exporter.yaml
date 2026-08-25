@@ -2,18 +2,18 @@
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: {{ include "gophprofile-infra.fullname" . }}-nodeexporter
+  name: {{ include "gophprofile.fullname" . }}-nodeexporter
   labels:
-    {{- include "gophprofile-infra.labels" . | nindent 4 }}
+    {{- include "gophprofile.labels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
-      {{- include "gophprofile-infra.selectorLabels" . | nindent 6 }}
+      {{- include "gophprofile.selectorLabels" . | nindent 6 }}
       component: nodeexporter
   template:
     metadata:
       labels:
-        {{- include "gophprofile-infra.selectorLabels" . | nindent 8 }}
+        {{- include "gophprofile.selectorLabels" . | nindent 8 }}
         component: nodeexporter
     spec:
       hostNetwork: true # Дает прямой доступ к сетевым интерфейсам хоста
@@ -31,10 +31,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "gophprofile-infra.fullname" . }}-nodeexporter
+  name: {{ include "gophprofile.fullname" . }}-nodeexporter
 spec:
   selector:
-    {{- include "gophprofile-infra.selectorLabels" . | nindent 4 }}
+    {{- include "gophprofile.selectorLabels" . | nindent 4 }}
     component: nodeexporter
   ports:
   - port: 9100
