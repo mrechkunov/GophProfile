@@ -1,0 +1,32 @@
+1. добавлена папка k8s в ней все файлы для запуска в кубе
+2. для деплоя использовал локальный кластер в контейнере minikube
+
+3. brew install minikube
+
+4. minikube addons enable ingress
+5. minikube addons enable metrics-server
+6. minikube start
+
+7. minikube image build -t gophprofile-app:13.0.0 .
+8. brew install helm
+
+
+9. для http трафика 
+nohup kubectl port-forward --address 0.0.0.0 service/ingress-nginx-controller 8989:80 -n ingress-nginx > /dev/null 2>&1 & (делаем на машине на которой развернут миникуб, прокидываем порт 80 миникуба на внешний порт сервера 8989)
+
+10. для постргеса
+nohup kubectl port-forward --address 0.0.0.0 service/gophprofile-postgres 5432:5432 -n default > /dev/null 2>&1 &
+
+
+
+
+11. add at /etc/hosts
+<IP-devsrv>   gophprofile.devsrv
+<IP-devsrv>   grafana.devsrv
+<IP-devsrv>   jaeger.devsrv
+<IP-devsrv>   prom.devsrv
+
+12. cd ./k8s/helm
+
+13. helm install gophprofile ./gophprofile -f ./gophprofile/values-secrets.yaml 
+14. helm uninstall gophprofile

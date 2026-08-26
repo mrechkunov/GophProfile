@@ -198,7 +198,7 @@ func (h *AvatarHandler) DeleteAvatarHandler(w http.ResponseWriter, r *http.Reque
 	h.metrics.DeleteDurationHist.Record(ctx, durationMs, metric.WithAttributes(
 		attribute.String("status", "success"),
 	))
-
+	h.logger.InfoContext(ctx, "DeleteAvatar request complite", "avatar_id", avatarID, "user_id", userID)
 	w.WriteHeader(http.StatusNoContent)
 	span.SetStatus(codes.Ok, "Avatar soft-deleted and purge task scheduled successfully")
 }

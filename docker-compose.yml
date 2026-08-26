@@ -1,3 +1,4 @@
+
 services:
   kafka:
     image: confluentinc/cp-kafka:8.0.7
@@ -9,9 +10,9 @@ services:
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: 'broker,controller'
-      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:9093, CONTROLLER://0.0.0.0:29093'
-      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://localhost:9092, PLAINTEXT_INTERNAL://kafka:9093'
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT, PLAINTEXT_INTERNAL:PLAINTEXT'
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,PLAINTEXT_INTERNAL://0.0.0.0:9093,CONTROLLER://0.0.0.0:29093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:9093'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT'
       KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:29093'
       KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
       KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
@@ -26,7 +27,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 5s
+      start_period: 15s # Увеличено, так как Kafka долго инициализирует KRaft
 
   postgres:
     image: postgres:15-alpine
@@ -37,8 +38,8 @@ services:
       POSTGRES_PASSWORD: secret
       POSTGRES_DB: gophprofiledb
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U gophprofile_user -d gophprofiledb && psql -U gophprofile_user -d gophprofiledb -c 'SELECT 1;'"]
+      interval: 5s 
       timeout: 5s
       retries: 5
       start_period: 5s
@@ -67,6 +68,25 @@ services:
     command: server --console-address ":9001" /data
     restart: unless-stopped
 
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.143.0
+    container_name: otel-collector
+    ports:
+      - "4317:4317"
+      - "13133:13133"
+      - "8889:8889"
+    command:
+      - "--config=/etc/otel-collector-config.yml"
+    volumes:
+      - ./otel-collector-config.yml:/etc/otel-collector-config.yml:ro
+
+    healthcheck:
+      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otel-collector-config.yml"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
  
   app-server:
     build:
@@ -79,7 +99,7 @@ services:
       - "8080:8080"
     environment:
       - SERVER_PORT=:8080
-      - DATABASE_URI=postgres://gophprofile_user:secret@postgres/gophprofiledb?sslmode=disable
+      - DATABASE_URI=postgres://gophprofile_user:secret@postgres:5432/gophprofiledb?sslmode=disable
       - MINIO_HOST=minio:9000
       - MINIO_ROOT_USER=gophprofile_user
       - MINIO_ROOT_PASSWORD=supersecretpassword
@@ -98,11 +118,7 @@ services:
       minio:
         condition: service_healthy
       otel-collector:
-        condition: service_started
-      loki:
-        condition: service_started
-      grafana:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
   worker:
@@ -111,7 +127,7 @@ services:
     command: ./worker           
     environment:
       - SERVER_PORT=:8080
-      - DATABASE_URI=postgres://gophprofile_user:secret@postgres/gophprofiledb?sslmode=disable
+      - DATABASE_URI=postgres://gophprofile_user:secret@postgres:5432/gophprofiledb?sslmode=disable
       - MINIO_HOST=minio:9000
       - MINIO_ROOT_USER=gophprofile_user
       - MINIO_ROOT_PASSWORD=supersecretpassword
@@ -124,61 +140,12 @@ services:
       - OTEL_EXPORTER_OTLP_INSECURE=true
     restart: always
     depends_on:
-      - app-server
-
-  otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.143.0
-    container_name: otel-collector
-    ports:
-      - "4317:4317"
-      - "13133:13133"
-      - "8889:8889" # Prometheus exporter metrics
-    command:
-      - "--config=/etc/otel-collector-config.yml"
-    volumes:
-      - ./otel-collector-config.yml:/etc/otel-collector-config.yml:ro
-    healthcheck:
-      test: ["CMD", "/otelcol-contrib", "validate", "--config=/etc/otel-collector-config.yml"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-      start_period: 5s
-    restart: unless-stopped
-  
-  opensearch:
-    image: opensearchproject/opensearch:3.4.0
-    container_name: opensearch
-    ports:
-      - "9200:9200"
-    environment:
-      - discovery.type=single-node
-      - DISABLE_SECURITY_PLUGIN=true
-    volumes:
-      - opensearch-data:/usr/share/opensearch/data
-    healthcheck:
-      test:
-        ["CMD-SHELL", 'python3.9 -c "import urllib.request; urllib.request.urlopen(''http://localhost:9200/_cluster/health'', timeout=2)"',]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 60s
-    depends_on:
-      otel-collector:
+      postgres:
         condition: service_healthy
-    restart: unless-stopped
-
-  opensearch-dashboards:
-    image: opensearchproject/opensearch-dashboards:3.4.0
-    container_name: opensearch-dashboards
-    ports:
-      - 5601:5601
-    environment:
-      - OPENSEARCH_HOSTS=["http://opensearch:9200"]
-      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=true
-    depends_on:
-      opensearch:
+      kafka:
         condition: service_healthy
-    restart: unless-stopped
+      app-server:
+        condition: service_started
 
   loki:
     image: grafana/loki:main-0fd55b9
@@ -190,9 +157,6 @@ services:
     volumes:
       - ./loki-config.yml:/etc/loki/local-config.yml:ro
       - loki-data:/loki
-    depends_on:
-      otel-collector:
-        condition: service_healthy
     restart: unless-stopped
 
   grafana:
@@ -208,8 +172,6 @@ services:
       - ./grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
       - grafana-data:/var/lib/grafana
     depends_on:
-      opensearch:
-        condition: service_healthy
       loki:
         condition: service_started
       prometheus:
@@ -235,13 +197,9 @@ services:
     container_name: jaeger
     ports:
       - "16686:16686"
-      - "4317"        
-
 volumes:
   kafka_data:
   pg_data:
   minio_data:
   loki-data:
   grafana-data:
-  opensearch-data:
-  

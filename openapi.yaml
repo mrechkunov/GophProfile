@@ -1,0 +1,312 @@
+openapi: 3.0.3
+info:
+  title: GophProfile Avatar Service
+  description: Production-ready микросервис для управления и асинхронной обработки аватарок пользователей.
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+    description: Локальный сервер разработки
+paths:
+  /:
+    get:
+      summary: Индексный эндпоинт
+      description: Проверка базовой доступности корня сервиса.
+      responses:
+        '200':
+          description: Успешный ответ
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/v1/avatars:
+    post:
+      summary: Загрузка новой аватарки пользователя
+      description: Принимает бинарный файл (JPEG, PNG, WebP), сохраняет оригинал в MinIO S3, создает запись в PostgreSQL со статусом `processing` и отправляет асинхронную задачу на ресайз в Apache Kafka.
+      parameters:
+        - name: X-User-ID
+          in: header
+          required: true
+          description: Идентификатор авторизованного пользователя (используется для поклиентского Rate Limiting)
+          schema:
+            type: string
+            example: "usr_67a1b2c3"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Файл изображения (ограничение до 10 МБ для защиты от OOM)
+      responses:
+        '201':
+          description: Аватар успешно принят и отправлен на обработку
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  avatar_id:
+                    type: string
+                    format: uuid
+                    example: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+                  status:
+                    type: string
+                    example: "processing"
+        '400':
+          $ref: '#/components/responses/400BadRequest'
+        '429':
+          $ref: '#/components/responses/429TooManyRequests'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /api/v1/avatars/{avatar_id}:
+    get:
+      summary: Получение метаданных и путей аватара по его ID
+      description: Возвращает информацию об аватаре, включая ссылки на сгенерированные воркером превью (миниатюры), если обработка завершена.
+      parameters:
+        - name: avatar_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          example: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+      responses:
+        '200':
+          description: Данные аватара успешно получены
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Avatar'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+    delete:
+      summary: Мягкое удаление аватара
+      description: Помечает запись в PostgreSQL как удаленную (`deleted_at`), извлекает ключи файлов S3 и отправляет задачу на физическую очистку бакета MinIO в брокер Kafka.
+      parameters:
+        - name: avatar_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Аватар успешно помечен на удаление
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "pending_physical_deletion"
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /api/v1/users/{user_id}/avatar:
+    get:
+      summary: Получение актуального аватара конкретного пользователя
+      description: Находит последнюю активную (не удаленную) аватарку пользователя в базе данных.
+      parameters:
+        - name: user_id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: "user_12345"
+      responses:
+        '200':
+          description: Актуальный аватар найден
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Avatar'
+        '404':
+          $ref: '#/components/responses/404NotFound'
+        '500':
+          $ref: '#/components/responses/500InternalServerError'
+
+  /api/v1/avatars/{avatar_id}/metadata:
+    get:
+      summary: Быстрое получение технических метаданных аватара
+      description: Используется внутренними сервисами для проверки разрешений (ширина/высота) и размера файла.
+      parameters:
+        - name: avatar_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Метаданные успешно прочитаны
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  width:
+                    type: integer
+                    example: 1920
+                  height:
+                    type: integer
+                    example: 1080
+                  size_bytes:
+                    type: integer
+                    example: 2048500
+                  mime_type:
+                    type: string
+                    example: "image/jpeg"
+        '404':
+          $ref: '#/components/responses/404NotFound'
+
+  /health:
+    get:
+      summary: Liveness/Readiness Probe для Kubernetes
+      description: Проверяет физическое подключение к PostgreSQL, MinIO и Kafka. Если одна из критических зависимостей лежит, возвращает 503.
+      responses:
+        '200':
+          description: Сервис полностью работоспособен
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "UP"
+                  postgres:
+                    type: string
+                    example: "connected"
+                  kafka:
+                    type: string
+                    example: "connected"
+                  minio:
+                    type: string
+                    example: "connected"
+        '503':
+          description: Сервис или одна из его зависимостей недоступна
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "DOWN"
+
+components:
+  schemas:
+    Avatar:
+      type: object
+      properties:
+        uuid:
+          type: string
+          format: uuid
+          example: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+        user_id:
+          type: string
+          example: "user_12345"
+        file_name:
+          type: string
+          example: "my_photo.png"
+        mime_type:
+          type: string
+          example: "image/png"
+        size_bytes:
+          type: integer
+          example: 4194304
+        s3_key:
+          type: string
+          example: "avatars/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d.png"
+        thumbnail_s3_keys:
+          type: object
+          description: Мапа сгенерированных воркером превью разного формата/размера
+          additionalProperties:
+            type: string
+          example:
+            "100": "/avatars/minimals/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d_100.png"
+            "500": "/avatars/minimals/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d_500.png"
+        upload_status:
+          type: string
+          enum: [processing, success, failed]
+          example: "success"
+        processing_status:
+          type: string
+          example: "completed"
+        width:
+          type: integer
+          example: 800
+        height:
+          type: integer
+          example: 800
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-02-25T14:00:00Z"
+        updated_at:
+          type: string
+          format: date-time
+          example: "2026-02-25T14:00:05Z"
+
+  responses:
+    400BadRequest:
+      description: Невалидные входные данные (например, файл превышает лимит в 10 МБ или неверный формат)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "downloaded image size exceeds maximum safe limit (OOM protection)"
+    404NotFound:
+      description: Запрошенный ресурс (аватар или пользователь) не найден
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "avatar not found"
+    429TooManyRequests:
+      description: Сработал поклиентский Rate Limiting
+      headers:
+        Retry-After:
+          schema:
+            type: string
+          description: Время в секундах, через которое можно повторить запрос
+          example: "1"
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Too many requests. Please slow down."
+    500InternalServerError:
+      description: Внутренняя ошибка сервера (клиенту не раскрываются системные трейсы)
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: "Internal server error"

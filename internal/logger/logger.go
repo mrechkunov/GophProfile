@@ -146,7 +146,7 @@ func InitTraceProvider(ctx context.Context) func() {
 
 	// Возвращаем функцию плавного закрытия (Graceful Shutdown)
 	return func() {
-		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		ctx, cancel := context.WithTimeout(ctx, time.Second*5)
 		defer cancel()
 
 		if err := tracerProvider.Shutdown(ctx); err != nil {

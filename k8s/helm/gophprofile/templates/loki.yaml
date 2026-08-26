@@ -1,0 +1,97 @@
+{{- if .Values.observability.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-loki
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  resources:
+    requests:
+      storage: {{ .Values.observability.loki.persistence.size }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-loki-config
+data:
+  loki-config.yml: |
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+      grpc_listen_port: 9096
+      log_level: info
+    common:
+      instance_addr: 127.0.0.1
+      path_prefix: /data/loki
+      storage:
+        filesystem:
+          chunks_directory: /data/loki/chunks
+          rules_directory: /data/loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+    schema_config:
+      configs:
+        - from: 2020-10-24
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-loki
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "gophprofile.selectorLabels" . | nindent 6 }}
+      component: loki
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile.selectorLabels" . | nindent 8 }}
+        component: loki
+    spec:
+      securityContext:
+        fsGroup: 10001 # Дает Loki права писать на PVC диск
+      containers:
+      - name: loki
+        image: "{{ .Values.observability.loki.image }}"
+        args: ["-config.file=/etc/loki/loki-config.yml"]
+        ports:
+        - containerPort: 3100
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/loki/loki-config.yml
+          subPath: loki-config.yml
+        - name: storage
+          mountPath: /data
+        resources:
+          {{- toYaml .Values.observability.loki.resources | nindent 10 }}
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ include "gophprofile.fullname" . }}-loki-config
+        - name: storage
+          persistentVolumeClaim:
+            claimName: {{ include "gophprofile.fullname" . }}-loki
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-loki
+spec:
+  selector:
+    {{- include "gophprofile.selectorLabels" . | nindent 4 }}
+    component: loki
+  ports:
+  - port: 3100
+    targetPort: 3100
+{{- end }}

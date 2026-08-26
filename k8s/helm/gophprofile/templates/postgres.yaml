@@ -1,0 +1,89 @@
+{{- if .Values.postgres.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-postgres
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    component: postgres
+spec:
+  accessModes:
+    {{- toYaml .Values.postgres.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.postgres.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-postgres
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    component: postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "gophprofile.selectorLabels" . | nindent 6 }}
+      component: postgres
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile.selectorLabels" . | nindent 8 }}
+        component: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: "{{ .Values.postgres.image.repository }}:{{ .Values.postgres.image.tag }}"
+        imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+        env:
+        - name: POSTGRES_USER
+          value: {{ .Values.postgres.env.user | quote }}
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "gophprofile.fullname" . }}-secrets
+              key: postgres-password
+        - name: POSTGRES_DB
+          value: {{ .Values.postgres.env.db | quote }}
+        ports:
+        - containerPort: {{ .Values.postgres.service.port }}
+        resources:
+          {{- toYaml .Values.postgres.resources | nindent 10 }}
+        volumeMounts:
+        - name: pg-data
+          mountPath: /var/lib/postgresql/data
+        readinessProbe:
+          exec:
+            command: 
+            - sh
+            - -c
+            - |
+              pg_isready -U "{{ .Values.postgres.env.user }}" -d "{{ .Values.postgres.env.db }}" && \
+              PGPASSWORD="{{ .Values.postgres.env.password }}" psql -U "{{ .Values.postgres.env.user }}" -d "{{ .Values.postgres.env.db }}" -c "SELECT 1;"
+          initialDelaySeconds: 15
+          periodSeconds: 10
+      volumes:
+      - name: pg-data
+        persistentVolumeClaim:
+          claimName: {{ include "gophprofile.fullname" . }}-postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-postgres
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    component: postgres
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "gophprofile.selectorLabels" . | nindent 4 }}
+    component: postgres
+  ports:
+  - port: {{ .Values.postgres.service.port }}
+    targetPort: {{ .Values.postgres.service.port }}
+    protocol: TCP
+{{- end }}

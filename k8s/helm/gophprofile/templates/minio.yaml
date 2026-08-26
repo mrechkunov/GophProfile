@@ -1,0 +1,82 @@
+{{- if .Values.minio.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-minio
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    component: minio
+spec:
+  accessModes:
+    {{- toYaml .Values.minio.persistence.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.minio.persistence.size }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-minio
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    component: minio
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "gophprofile.selectorLabels" . | nindent 6 }}
+      component: minio
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile.selectorLabels" . | nindent 8 }}
+        component: minio
+    spec:
+      containers:
+      - name: minio
+        image: "{{ .Values.minio.image.repository }}:{{ .Values.minio.image.tag }}"
+        imagePullPolicy: {{ .Values.minio.image.pullPolicy }}
+        command: ["/usr/bin/minio"]
+        args: ["server", "--console-address", ":9001", "/data"]
+        ports:
+        - containerPort: {{ .Values.minio.service.apiPort }}
+        - containerPort: {{ .Values.minio.service.consolePort }}
+        env:
+        - name: MINIO_ROOT_USER
+          value: {{ .Values.minio.env.rootUser | quote }}
+        - name: MINIO_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "gophprofile.fullname" . }}-secrets
+              key: minio-secret-key
+        resources:
+          {{- toYaml .Values.minio.resources | nindent 10 }}
+        volumeMounts:
+        - name: minio-data
+          mountPath: /data
+      volumes:
+      - name: minio-data
+        persistentVolumeClaim:
+          claimName: {{ include "gophprofile.fullname" . }}-minio
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-minio
+  labels:
+    {{- include "gophprofile.labels" . | nindent 4 }}
+    component: minio
+spec:
+  selector:
+    {{- include "gophprofile.selectorLabels" . | nindent 4 }}
+    component: minio
+  ports:
+  - name: api
+    port: {{ .Values.minio.service.apiPort }}
+    targetPort: {{ .Values.minio.service.apiPort }}
+  - name: console
+    port: {{ .Values.minio.service.consolePort }}
+    targetPort: {{ .Values.minio.service.consolePort }}
+{{- end }}

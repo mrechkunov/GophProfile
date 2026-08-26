@@ -13,8 +13,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"syscall"
+	"time"
 
 	"gophprofile/internal/config"
 	"gophprofile/internal/logger"
@@ -31,10 +33,12 @@ const (
 	KafkaResizeGroupID = "avatar-resize-worker-group"
 	KafkaDeleteGroupID = "avatar-delete-cleaner-group"
 	BucketName         = "avatars"
+
+	// Ограничение размера файла в памяти для предотвращения OOM (15 МБ)
+	MaxImageMemorySize = 15 * 1024 * 1024
 )
 
 func init() {
-	// Регистрируем WebP декодер для ресайза
 	image.RegisterFormat("webp", "RIFF????WEBP", webp.Decode, webp.DecodeConfig)
 }
 
@@ -52,7 +56,8 @@ func NewResizeProcessor(s3 repository.MinioClientAPI, repo repository.AvatarRepo
 	return &ResizeProcessor{
 		s3:     s3,
 		repo:   repo,
-		logger: log}
+		logger: log,
+	}
 }
 
 func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) error {
@@ -69,9 +74,16 @@ func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) er
 	}
 	defer object.Close()
 
-	imgData, err := io.ReadAll(object)
+	// Ограничиваем чтение сверху (+1 байт для фиксации превышения лимита)
+	limitedReader := io.LimitReader(object, MaxImageMemorySize+1)
+	imgData, err := io.ReadAll(limitedReader)
 	if err != nil {
 		return fmt.Errorf("failed to read object data: %w", err)
+	}
+
+	// Защита от OOM: если файл больше лимита, прерываем обработку
+	if int64(len(imgData)) > MaxImageMemorySize {
+		return fmt.Errorf("downloaded image size exceeds maximum safe limit %d (OOM protection)", MaxImageMemorySize)
 	}
 
 	srcImg, imgType, err := image.Decode(bytes.NewReader(imgData))
@@ -124,6 +136,11 @@ func (p *ResizeProcessor) ProcessResizeTask(ctx context.Context, data []byte) er
 	}
 
 	p.logger.InfoContext(ctx, "Successfully processed and saved thumbnails for Avatar", "AvatarID", task.AvatarID)
+
+	// Явно освобождаем память и пинаем GC при интенсивной работе с графикой
+	srcImg = nil
+	runtime.GC()
+
 	return nil
 }
 
@@ -149,7 +166,7 @@ func (w *AvatarDeleteWorker) ProcessDeleteTask(ctx context.Context, payload []by
 		return fmt.Errorf("failed to unmarshal delete task: %w", err)
 	}
 
-	w.logger.InfoContext(ctx, "Worker starting physical cleanup for ", "AvatarID:", task.AvatarID, "Total files:", len(task.S3Keys))
+	w.logger.InfoContext(ctx, "Worker starting physical cleanup for", "AvatarID", task.AvatarID, "TotalFiles", len(task.S3Keys))
 
 	for _, key := range task.S3Keys {
 		if key == "" {
@@ -157,10 +174,10 @@ func (w *AvatarDeleteWorker) ProcessDeleteTask(ctx context.Context, payload []by
 		}
 		err := w.s3.RemoveObject(ctx, BucketName, key, minio.RemoveObjectOptions{})
 		if err != nil {
-			w.logger.ErrorContext(ctx, "Worker failed to physically remove object from MinIO:", "object key", key, "err", err)
+			w.logger.ErrorContext(ctx, "Worker failed to physically remove object from MinIO", "objectKey", key, "err", err)
 			continue
 		}
-		w.logger.InfoContext(ctx, "Physically removed object from S3:", "object key", key)
+		w.logger.InfoContext(ctx, "Physically removed object from S3", "objectKey", key)
 	}
 
 	return nil
@@ -171,92 +188,103 @@ func (w *AvatarDeleteWorker) ProcessDeleteTask(ctx context.Context, payload []by
 // ==========================================
 
 func main() {
-	// Настраиваем Graceful Shutdown через контекст
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Основной контекст жизненного цикла воркера
+	mainCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	//  Инициализируем провайдер логов
+	// Инициализируем провайдеры телеметрии
 	var otelLogsShutdown func()
-	logger.Log, otelLogsShutdown = logger.InitLoggerProvider(ctx)
-	defer func() {
-		if otelLogsShutdown != nil {
-			otelLogsShutdown()
-		}
-	}()
+	logger.Log, otelLogsShutdown = logger.InitLoggerProvider(mainCtx)
+	otelTracesShutdown := logger.InitTraceProvider(mainCtx)
+	otelMetricsShutdown := logger.InitMeterProvider(mainCtx)
 
-	//  Инициализируем провайдер трейсинга
-	otelTracesShutdown := logger.InitTraceProvider(ctx)
-	defer func() {
-		if otelTracesShutdown != nil {
-			otelTracesShutdown()
-		}
-	}()
+	config.InitWorker(mainCtx)
 
-	//  Инициализируем провайдер метрик
-	otelMetricsShutdown := logger.InitMeterProvider(ctx)
-	defer func() {
-		if otelMetricsShutdown != nil {
-			otelMetricsShutdown()
-		}
-	}()
-
-	//  Инициализируем конфигурацию воркера
-	config.InitWorker(ctx)
-
-	// Инициализируем общие для обоих процессов зависимости (БД на pgx/v5 и MinIO)
 	repo := repository.NewPostgresAvatarRepository(config.ConnWorker.DB)
 	s3Client := config.ConnWorker.MinioClient
 
-	// Создаем экземпляры наших процессоров логики
 	resizeProcessor := NewResizeProcessor(s3Client, repo, logger.Log)
 	deleteWorker := NewAvatarDeleteWorker(s3Client, logger.Log)
 
-	// Настраиваем Kafka ридеров для каждого топика
 	resizeReader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  []string{config.CfgWorker.KafkaBrokers},
-		Topic:    config.KafkaResizeTopic,
-		GroupID:  KafkaResizeGroupID,
-		MinBytes: 10e3,
-		MaxBytes: 10e6,
-	})
-	defer resizeReader.Close()
+		Brokers:        []string{config.CfgWorker.KafkaBrokers},
+		Topic:          config.KafkaResizeTopic,
+		GroupID:        KafkaResizeGroupID,
+		MinBytes:       10e3,
+		MaxBytes:       10e6,
+		CommitInterval: 0,
 
-	deleteReader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  []string{config.CfgWorker.KafkaBrokers},
-		Topic:    config.KafkaDeleteTopic,
-		GroupID:  KafkaDeleteGroupID,
-		MinBytes: 10e3,
-		MaxBytes: 10e6,
+		// prod-ready
+		ReadBatchTimeout: 10 * time.Second, // Максимальное время ожидания ответа от брокера
+		Dialer: &kafka.Dialer{
+			Timeout:   5 * time.Second, // Таймаут первичного TCP-подключения к Kafka
+			KeepAlive: 30 * time.Second,
+		},
+		// Стратегия балансировки при масштабировании подов воркера
+		GroupBalancers: []kafka.GroupBalancer{
+			kafka.RoundRobinGroupBalancer{},
+		},
 	})
-	defer deleteReader.Close()
+	deleteReader := kafka.NewReader(kafka.ReaderConfig{
+		Brokers:        []string{config.CfgWorker.KafkaBrokers},
+		Topic:          config.KafkaDeleteTopic,
+		GroupID:        KafkaDeleteGroupID,
+		MinBytes:       10e3,
+		MaxBytes:       10e6,
+		CommitInterval: 0,
+
+		// prod-ready
+		ReadBatchTimeout: 10 * time.Second, // Максимальное время ожидания ответа от брокера
+		Dialer: &kafka.Dialer{
+			Timeout:   5 * time.Second, // Таймаут первичного TCP-подключения к Kafka
+			KeepAlive: 30 * time.Second,
+		},
+		// Стратегия балансировки при масштабировании подов воркера
+		GroupBalancers: []kafka.GroupBalancer{
+			kafka.RoundRobinGroupBalancer{},
+		},
+	})
 
 	var wg sync.WaitGroup
 
-	logger.Log.InfoContext(ctx, "Combined Avatar Worker Daemon started successfully!")
+	logger.Log.InfoContext(mainCtx, "Combined Avatar Worker Daemon started successfully!")
 
 	// Рутина 1: Слушаем задачи на ресайз
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		logger.Log.InfoContext(ctx, "Subscribed to topic in kafka", "topic", config.KafkaResizeTopic)
+		logger.Log.InfoContext(mainCtx, "Subscribed to topic in kafka", "topic", config.KafkaResizeTopic)
 		for {
-			msg, err := resizeReader.FetchMessage(ctx)
+			msg, err := resizeReader.FetchMessage(mainCtx)
 			if err != nil {
-				if ctx.Err() != nil {
-					break
+				if mainCtx.Err() != nil {
+					return // Корректный выход при остановке пода
 				}
-				logger.Log.ErrorContext(ctx, "Error fetching resize message:", "err", err)
+				logger.Log.ErrorContext(mainCtx, "Error fetching resize message", "err", err)
+				time.Sleep(1 * time.Second) // Защита от бесконечного быстрого цикла при сбое сети
 				continue
 			}
 
-			if err := resizeProcessor.ProcessResizeTask(ctx, msg.Value); err != nil {
-				logger.Log.ErrorContext(ctx, "Failed to resize avatar for key:", "key", string(msg.Key), "err", err)
-				continue
-			}
+			// Выделяем независимый контекст с таймаутом на одну задачу
+			taskCtx, taskCancel := context.WithTimeout(context.Background(), 45*time.Second)
 
-			if err := resizeReader.CommitMessages(ctx, msg); err != nil {
-				logger.Log.ErrorContext(ctx, "Failed to commit resize message:", "err", err)
-			}
+			func() {
+				defer taskCancel()
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Log.ErrorContext(taskCtx, "PANIC RECOVERED in resize worker", "panic", r, "key", string(msg.Key))
+					}
+				}()
+
+				if err := resizeProcessor.ProcessResizeTask(taskCtx, msg.Value); err != nil {
+					logger.Log.ErrorContext(taskCtx, "Failed to resize avatar for key", "key", string(msg.Key), "err", err)
+					return
+				}
+
+				if err := resizeReader.CommitMessages(taskCtx, msg); err != nil {
+					logger.Log.ErrorContext(taskCtx, "Failed to commit resize message", "err", err)
+				}
+			}()
 		}
 	}()
 
@@ -264,31 +292,72 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		logger.Log.InfoContext(ctx, "Subscribed to topic in kafka", "topic", config.KafkaDeleteTopic)
+		logger.Log.InfoContext(mainCtx, "Subscribed to topic in kafka", "topic", config.KafkaDeleteTopic)
 		for {
-			msg, err := deleteReader.FetchMessage(ctx)
+			msg, err := deleteReader.FetchMessage(mainCtx)
 			if err != nil {
-				if ctx.Err() != nil {
-					break
+				if mainCtx.Err() != nil {
+					return
 				}
-				logger.Log.ErrorContext(ctx, "Error fetching delete message:", "err", err)
+				logger.Log.ErrorContext(mainCtx, "Error fetching delete message", "err", err)
+				time.Sleep(1 * time.Second)
 				continue
 			}
 
-			if err := deleteWorker.ProcessDeleteTask(ctx, msg.Value); err != nil {
-				logger.Log.ErrorContext(ctx, "Failed to clear S3 layout for key:", "key", string(msg.Key), "err", err)
-				continue
-			}
+			taskCtx, taskCancel := context.WithTimeout(context.Background(), 30*time.Second)
 
-			if err := deleteReader.CommitMessages(ctx, msg); err != nil {
-				logger.Log.ErrorContext(ctx, "Failed to commit delete message:", "err", err)
-			}
+			func() {
+				defer taskCancel()
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Log.ErrorContext(taskCtx, "PANIC RECOVERED in delete worker", "panic", r, "key", string(msg.Key))
+					}
+				}()
+
+				if err := deleteWorker.ProcessDeleteTask(taskCtx, msg.Value); err != nil {
+					logger.Log.ErrorContext(taskCtx, "Failed to clear S3 layout for key", "key", string(msg.Key), "err", err)
+					return
+				}
+
+				if err := deleteReader.CommitMessages(taskCtx, msg); err != nil {
+					logger.Log.ErrorContext(taskCtx, "Failed to commit delete message", "err", err)
+				}
+			}()
 		}
 	}()
 
-	// Ожидаем завершения горутин при системном сигнале SIGTERM
-	<-ctx.Done()
-	logger.Log.InfoContext(ctx, "Stopping worker consumers gracefully")
+	// Ожидаем сигнал ОС
+	<-mainCtx.Done()
+	logger.Log.InfoContext(context.Background(), "Stopping worker consumers gracefully...")
+
+	// Принудительно закрываем ридеры, прерывая зависшие FetchMessage
+	_ = resizeReader.Close()
+	_ = deleteReader.Close()
+
+	// Ждем завершения активных обработчиков тасок
 	wg.Wait()
-	logger.Log.InfoContext(ctx, "All background processes successfully stopped.")
+	logger.Log.InfoContext(context.Background(), "All background processing loops stopped. Closing connections...")
+
+	// Закрываем пулы инфраструктуры
+	if config.ConnWorker.DB != nil {
+		if err := config.ConnWorker.DB.Close(); err != nil {
+			logger.Log.Error("Error closing DB connection", "error", err)
+		}
+	}
+
+	// сброс телеметрии (Выполняем синхронно в самом конце)
+	logger.Log.Info("Отправка оставшихся метрик, трейсов и логов в коллектор...")
+
+	if otelMetricsShutdown != nil {
+		otelMetricsShutdown()
+	}
+	if otelTracesShutdown != nil {
+		otelTracesShutdown()
+	}
+	if otelLogsShutdown != nil {
+		otelLogsShutdown()
+	}
+
+	// Пишем через стандартный slog, так как кастомный logger.Log к этому моменту уже закрыт
+	slog.Info("Graceful shutdown успешно завершен.")
 }

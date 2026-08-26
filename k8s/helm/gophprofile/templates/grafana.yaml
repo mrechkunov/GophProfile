@@ -1,0 +1,92 @@
+{{- if .Values.observability.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-grafana
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  resources:
+    requests:
+      storage: {{ .Values.observability.grafana.persistence.size }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-grafana-datasources
+data:
+  datasources.yml: |
+    datasources:
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://{{ include "gophprofile.fullname" . }}-loki:3100
+        isDefault: true
+        editable: true
+        jsonData:
+          maxLines: 1000
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://{{ include "gophprofile.fullname" . }}-prometheus:9090
+        editable: true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-grafana
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "gophprofile.selectorLabels" . | nindent 6 }}
+      component: grafana
+  template:
+    metadata:
+      labels:
+        {{- include "gophprofile.selectorLabels" . | nindent 8 }}
+        component: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: "{{ .Values.observability.grafana.image }}"
+        ports:
+        - containerPort: 3000
+        resources:
+          {{- toYaml .Values.observability.grafana.resources | nindent 10 }}
+        env:
+        - name: GF_SECURITY_ADMIN_USER
+          value: {{ .Values.observability.grafana.adminUser | quote }}
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "gophprofile.fullname" . }}-secrets
+              key: grafana-admin-password
+        volumeMounts:
+        - name: datasources-volume
+          mountPath: /etc/grafana/provisioning/datasources/datasources.yml
+          subPath: datasources.yml
+        - name: storage
+          mountPath: /var/lib/grafana
+      volumes:
+        - name: datasources-volume
+          configMap:
+            name: {{ include "gophprofile.fullname" . }}-grafana-datasources
+        - name: storage
+          persistentVolumeClaim:
+            claimName: {{ include "gophprofile.fullname" . }}-grafana
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "gophprofile.fullname" . }}-grafana
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "gophprofile.selectorLabels" . | nindent 4 }}
+    component: grafana
+  ports:
+  - port: 3000
+    targetPort: 3000
+{{- end }}
